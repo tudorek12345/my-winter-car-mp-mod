@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{B5A01C26-3A4B-4E87-9F48-1C2C6C7D9F4C}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>MWCSpectatorSync</RootNamespace>
+    <AssemblyName>MWCSpectatorSync</AssemblyName>
+    <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <GameDir Condition=" '$(GameDir)' == '' ">C:\Program Files (x86)\Steam\steamapps\common\My Winter Car</GameDir>
+    <BepInExDir>$(GameDir)\BepInEx</BepInExDir>
+    <ManagedDir>$(GameDir)\MyWinterCar_Data\Managed</ManagedDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>none</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Xml" />
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExDir)\core\BepInEx.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule" Condition="Exists('$(ManagedDir)\UnityEngine.CoreModule.dll')">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.SceneManagement" Condition="Exists('$(ManagedDir)\UnityEngine.SceneManagement.dll')">
+      <HintPath>$(ManagedDir)\UnityEngine.SceneManagement.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Steamworks.NET">
+      <HintPath>$(ManagedDir)\Steamworks.NET.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Plugin.cs" />
+    <Compile Include="Config\Settings.cs" />
+    <Compile Include="Net\Protocol.cs" />
+    <Compile Include="Net\ITransport.cs" />
+    <Compile Include="Net\SteamP2PTransport.cs" />
+    <Compile Include="Net\TcpTransport.cs" />
+    <Compile Include="Net\HostSession.cs" />
+    <Compile Include="Net\SpectatorSession.cs" />
+    <Compile Include="Sync\CameraFollower.cs" />
+    <Compile Include="Sync\LevelSync.cs" />
+    <Compile Include="UI\Overlay.cs" />
+    <Compile Include="Util\MainThreadDispatcher.cs" />
+  </ItemGroup>
+</Project>
