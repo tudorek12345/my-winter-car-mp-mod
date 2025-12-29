@@ -2,12 +2,13 @@ using System;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 
-namespace MWCSpectatorSync.Config
+namespace MyWinterCarMpMod.Config
 {
     public enum Mode
     {
         Host = 0,
-        Spectator = 1
+        Client = 1,
+        Spectator = Client
     }
 
     public enum TransportKind
@@ -39,7 +40,7 @@ namespace MWCSpectatorSync.Config
 
         public void Bind(ConfigFile config, ManualLogSource log)
         {
-            Mode = config.Bind("General", "Mode", Config.Mode.Host, "Host or Spectator mode.");
+            Mode = config.Bind("General", "Mode", Config.Mode.Host, "Host or Client (co-op) mode.");
             Transport = config.Bind("General", "Transport", TransportKind.SteamP2P, "SteamP2P (default) or TcpLan.");
             SendHz = config.Bind("General", "SendHz", 20, "Send rate in Hz (clamped 1-60).");
             SmoothingPosition = config.Bind("General", "SmoothingPosition", 0.15f, "Camera position smoothing (0-1).");
@@ -47,20 +48,20 @@ namespace MWCSpectatorSync.Config
             OverlayEnabled = config.Bind("General", "OverlayEnabled", true, "Show on-screen overlay.");
             VerboseLogging = config.Bind("General", "VerboseLogging", false, "Enable verbose logging.");
 
-            SpectatorHostSteamId = config.Bind("SteamP2P", "SpectatorHostSteamId", 0ul, "Spectator sets host SteamID64 (0 to show in overlay).");
-            AllowOnlySteamId = config.Bind("SteamP2P", "AllowOnlySteamId", 0ul, "Host allowlist SteamID64 (0 allows first spectator).");
+            SpectatorHostSteamId = config.Bind("SteamP2P", "SpectatorHostSteamId", 0ul, "Client sets host SteamID64 (0 to show in overlay).");
+            AllowOnlySteamId = config.Bind("SteamP2P", "AllowOnlySteamId", 0ul, "Host allowlist SteamID64 (0 allows first client).");
             P2PChannel = config.Bind("SteamP2P", "P2PChannel", 0, "Steam P2P channel (0-255).");
             ReliableForControl = config.Bind("SteamP2P", "ReliableForControl", true, "Send LevelChange/Marker reliable on Steam.");
 
             HostBindIP = config.Bind("TcpLan", "HostBindIP", "0.0.0.0", "Host bind IP for TCP fallback.");
             HostPort = config.Bind("TcpLan", "HostPort", 27055, "Host TCP port for fallback.");
-            SpectatorHostIP = config.Bind("TcpLan", "SpectatorHostIP", "127.0.0.1", "Spectator target IP for fallback.");
+            SpectatorHostIP = config.Bind("TcpLan", "SpectatorHostIP", "127.0.0.1", "Client target IP for fallback.");
 
-            SpectatorLockdown = config.Bind("Spectator", "SpectatorLockdown", true, "Best-effort disable player input scripts on spectator.");
+            SpectatorLockdown = config.Bind("Spectator", "SpectatorLockdown", true, "Spectator-only input lockdown (unused in co-op).");
 
             if (log != null)
             {
-                log.LogInfo("MWC Spectator Sync settings loaded.");
+                log.LogInfo("My Winter Car MP Mod settings loaded.");
             }
         }
 

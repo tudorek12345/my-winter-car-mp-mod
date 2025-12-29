@@ -1,6 +1,6 @@
-# My Winter Car MP Mod (MVP)
+# My Winter Car Multiplayer Mod (WIP)
 
-Adds a Steam P2P spectator mode for "My Winter Car" (Unity Mono). The spectator camera follows the host camera and syncs level changes plus a simple progress marker. Spectator sync first; full co-op later. This is just starting and trying to make it work.
+Adds a two-player co-op prototype for "My Winter Car" (Unity Mono). The build syncs player presence (position + view) as a remote avatar, plus level changes and a simple progress marker. Full co-op/world sync comes later.
 
 ## Requirements
 - My Winter Car installed and launched via Steam
@@ -9,16 +9,16 @@ Adds a Steam P2P spectator mode for "My Winter Car" (Unity Mono). The spectator 
 
 ## Host Steps
 1. Set `Mode = Host`.
-2. (Optional) Set `AllowOnlySteamId` to restrict to a single spectator SteamID64.
+2. (Optional) Set `AllowOnlySteamId` to restrict to a single client SteamID64.
 3. Press `F6` to start hosting.
 4. Share the Host SteamID64 shown in the overlay.
 5. Press `F9` to set the progress marker (timestamp + preset note).
 
-## Spectator Steps
-1. Set `Mode = Spectator`.
+## Client Steps
+1. Set `Mode = Client`.
 2. Set `SpectatorHostSteamId` to the host SteamID64 (Steam P2P).
 3. Press `F7` to connect.
-4. The spectator camera follows the host; press `F8` to toggle the overlay.
+4. You should see a remote player avatar; press `F8` to toggle the overlay.
 
 ## Transport
 - Default: Steam P2P. If Steam init fails or the game is not running under Steam, it auto-falls back to TCP LAN and shows a warning in the overlay.
@@ -26,7 +26,7 @@ Adds a Steam P2P spectator mode for "My Winter Car" (Unity Mono). The spectator 
 
 ## Config (BepInEx)
 General:
-- `Mode = Host | Spectator`
+- `Mode = Host | Client`
 - `Transport = SteamP2P | TcpLan`
 - `SendHz = 20`
 - `SmoothingPosition = 0.15`
@@ -46,28 +46,28 @@ TCP LAN:
 - `SpectatorHostIP = 127.0.0.1`
 
 Spectator:
-- `SpectatorLockdown = true` (best-effort disable input scripts)
+- `SpectatorLockdown = true` (legacy, unused for co-op)
 
 ## Current Work (Now)
-- Camera selection ignores map cameras and prefers player cameras based on decompiled game scripts (`MainCamera`, `CarCameras`, `CarCamerasController`, `SmoothFollow`, `S_Camera`).
-- Spectator lockdown disables additional input/camera scripts from the decompiled code (`SmoothMouseLook`, `SimpleSmoothMouseLook`, car controller scripts) to prevent local input fighting the synced camera.
-- Spectator mode blocks map toggle (`M`) by clearing `StartGame.mapCameraController` and blocks camera switching (`C`) by disabling `CarCamerasController` when `SpectatorLockdown` is enabled.
+- Player locator prefers main/player cameras and decompiled player controllers (`CharacterMotor`, `FPSInputController`, `FirstPersonController`) to find the local player.
+- Two-way player state sync (host <-> client) for position + view rotation.
+- Remote player avatar (capsule) with smoothing to reduce jitter.
 
 ## Current Scope
-- One-way sync: host -> spectator only.
-- Syncs camera position/rotation/FOV, level changes, and a progress marker.
+- Two-player only (host + client).
+- Bidirectional player presence sync (position + view rotation).
+- Host drives level change and progress marker.
 - Steam P2P transport with TCP LAN fallback.
 - No world/physics/vehicle/inventory/AI/time-of-day sync.
 
 ## Future (Full Co-op)
 - Plan is full state replication with two-way sync (players, vehicles, items, AI, physics).
-- Likely needs an authoritative host with reconciliation to keep physics stable.
-- Will be built incrementally after spectator sync is solid.
+- Likely needs an authoritative host with client input replication/reconciliation for physics stability.
+- Will be built incrementally after presence sync is solid.
 
 ## Known Limitations
 - No syncing of physics, vehicles, items, AI, doors, or inventory.
-- No co-op interaction or streaming; only state replication.
-- Spectator lockdown is conservative and may not disable all input scripts.
+- Remote player avatar is visual-only (no collisions or interactions yet).
 
 ## Troubleshooting
 - Steam init failed: ensure the game is launched via Steam; fallback to TCP LAN.
@@ -77,4 +77,4 @@ Spectator:
 ## Build Notes
 - Target framework is .NET Framework 3.5 for older Unity (Mono).
 - If your Steamworks.NET build requires 4.x, retarget the project to .NET 4.7.2 and update references accordingly.
-- Update the `GameDir` property in `src/MWCSpectatorSync/MWCSpectatorSync.csproj` to match your install.
+- Update the `GameDir` property in `src/MyWinterCarMpMod/MyWinterCarMpMod.csproj` to match your install.

@@ -5,14 +5,14 @@
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
     <ProjectGuid>{B5A01C26-3A4B-4E87-9F48-1C2C6C7D9F4C}</ProjectGuid>
     <OutputType>Library</OutputType>
-    <RootNamespace>MWCSpectatorSync</RootNamespace>
-    <AssemblyName>MWCSpectatorSync</AssemblyName>
+    <RootNamespace>MyWinterCarMpMod</RootNamespace>
+    <AssemblyName>MyWinterCarMpMod</AssemblyName>
     <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
   </PropertyGroup>
 
   <PropertyGroup>
-    <GameDir Condition=" '$(GameDir)' == '' ">C:\Program Files (x86)\Steam\steamapps\common\My Winter Car</GameDir>
+    <GameDir Condition=" '$(GameDir)' == '' ">C:\Games\My.Winter.Car\game</GameDir>
     <BepInExDir>$(GameDir)\BepInEx</BepInExDir>
     <ManagedDir>$(GameDir)\MyWinterCar_Data\Managed</ManagedDir>
   </PropertyGroup>
@@ -51,8 +51,8 @@
       <HintPath>$(ManagedDir)\UnityEngine.SceneManagement.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="Steamworks.NET">
-      <HintPath>$(ManagedDir)\Steamworks.NET.dll</HintPath>
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>$(ManagedDir)\Assembly-CSharp-firstpass.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>
@@ -65,10 +65,13 @@
     <Compile Include="Net\SteamP2PTransport.cs" />
     <Compile Include="Net\TcpTransport.cs" />
     <Compile Include="Net\HostSession.cs" />
-    <Compile Include="Net\SpectatorSession.cs" />
+    <Compile Include="Net\ClientSession.cs" />
     <Compile Include="Sync\CameraFollower.cs" />
     <Compile Include="Sync\LevelSync.cs" />
+    <Compile Include="Sync\PlayerLocator.cs" />
+    <Compile Include="Sync\RemotePlayerAvatar.cs" />
     <Compile Include="UI\Overlay.cs" />
     <Compile Include="Util\MainThreadDispatcher.cs" />
   </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

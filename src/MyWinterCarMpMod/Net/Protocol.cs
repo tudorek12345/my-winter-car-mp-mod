@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Text;
 
-namespace MWCSpectatorSync.Net
+namespace MyWinterCarMpMod.Net
 {
     public enum MessageType : ushort
     {
@@ -13,7 +13,8 @@ namespace MWCSpectatorSync.Net
         ProgressMarker = 5,
         Ping = 6,
         Pong = 7,
-        Disconnect = 8
+        Disconnect = 8,
+        PlayerState = 9
     }
 
     public struct HelloData
@@ -42,6 +43,18 @@ namespace MWCSpectatorSync.Net
         public float Fov;
     }
 
+    public struct PlayerStateData
+    {
+        public long UnixTimeMs;
+        public float PosX;
+        public float PosY;
+        public float PosZ;
+        public float ViewRotX;
+        public float ViewRotY;
+        public float ViewRotZ;
+        public float ViewRotW;
+    }
+
     public struct LevelChangeData
     {
         public int LevelIndex;
@@ -59,6 +72,7 @@ namespace MWCSpectatorSync.Net
         public HelloData Hello;
         public HelloAckData HelloAck;
         public CameraStateData CameraState;
+        public PlayerStateData PlayerState;
         public LevelChangeData LevelChange;
         public ProgressMarkerData ProgressMarker;
     }
@@ -110,6 +124,24 @@ namespace MWCSpectatorSync.Net
                 writer.Write(state.RotZ);
                 writer.Write(state.RotW);
                 writer.Write(state.Fov);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildPlayerState(PlayerStateData state)
+        {
+            using (MemoryStream stream = new MemoryStream(64))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.PlayerState);
+                writer.Write(state.UnixTimeMs);
+                writer.Write(state.PosX);
+                writer.Write(state.PosY);
+                writer.Write(state.PosZ);
+                writer.Write(state.ViewRotX);
+                writer.Write(state.ViewRotY);
+                writer.Write(state.ViewRotZ);
+                writer.Write(state.ViewRotW);
                 return stream.ToArray();
             }
         }
@@ -216,6 +248,19 @@ namespace MWCSpectatorSync.Net
                                 RotZ = reader.ReadSingle(),
                                 RotW = reader.ReadSingle(),
                                 Fov = reader.ReadSingle()
+                            };
+                            break;
+                        case MessageType.PlayerState:
+                            result.PlayerState = new PlayerStateData
+                            {
+                                UnixTimeMs = reader.ReadInt64(),
+                                PosX = reader.ReadSingle(),
+                                PosY = reader.ReadSingle(),
+                                PosZ = reader.ReadSingle(),
+                                ViewRotX = reader.ReadSingle(),
+                                ViewRotY = reader.ReadSingle(),
+                                ViewRotZ = reader.ReadSingle(),
+                                ViewRotW = reader.ReadSingle()
                             };
                             break;
                         case MessageType.LevelChange:

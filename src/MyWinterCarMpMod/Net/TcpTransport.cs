@@ -4,10 +4,10 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using BepInEx.Logging;
-using MWCSpectatorSync.Config;
-using MWCSpectatorSync.Util;
+using MyWinterCarMpMod.Config;
+using MyWinterCarMpMod.Util;
 
-namespace MWCSpectatorSync.Net
+namespace MyWinterCarMpMod.Net
 {
     public sealed class TcpTransport : ITransport
     {

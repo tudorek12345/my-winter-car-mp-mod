@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace MWCSpectatorSync.Util
+namespace MyWinterCarMpMod.Util
 {
     public sealed class MainThreadDispatcher : MonoBehaviour
     {

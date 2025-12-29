@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace MWCSpectatorSync.UI
+namespace MyWinterCarMpMod.UI
 {
     public struct OverlayState
     {
@@ -36,7 +36,7 @@ namespace MWCSpectatorSync.UI
             GUILayout.BeginArea(new Rect(10f, 10f, 480f, 240f));
             GUILayout.BeginVertical(_boxStyle);
 
-            GUILayout.Label(state.Title ?? "MWC Spectator Sync", _labelStyle);
+            GUILayout.Label(state.Title ?? "My Winter Car MP Mod", _labelStyle);
             GUILayout.Label("Mode: " + state.Mode + "  Transport: " + state.Transport, _labelStyle);
             GUILayout.Label("Status: " + state.Status, _labelStyle);
 

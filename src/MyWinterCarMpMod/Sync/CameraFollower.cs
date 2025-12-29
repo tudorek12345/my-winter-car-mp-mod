@@ -1,8 +1,8 @@
 using System;
-using MWCSpectatorSync.Net;
+using MyWinterCarMpMod.Net;
 using UnityEngine;
 
-namespace MWCSpectatorSync.Sync
+namespace MyWinterCarMpMod.Sync
 {
     public sealed class CameraFollower
     {
@@ -44,7 +44,8 @@ namespace MWCSpectatorSync.Sync
 
             Vector3 newPos = Vector3.Lerp(t.position, targetPos, posLerp);
             Quaternion newRot = Quaternion.Slerp(t.rotation, targetRot, rotLerp);
-            t.SetPositionAndRotation(newPos, newRot);
+            t.position = newPos;
+            t.rotation = newRot;
 
             cam.fieldOfView = Mathf.Lerp(cam.fieldOfView, state.Fov, rotLerp);
         }

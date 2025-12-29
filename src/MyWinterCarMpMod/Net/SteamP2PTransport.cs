@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using BepInEx.Logging;
-using MWCSpectatorSync.Config;
+using MyWinterCarMpMod.Config;
 using Steamworks;
 
-namespace MWCSpectatorSync.Net
+namespace MyWinterCarMpMod.Net
 {
     public sealed class SteamP2PTransport : ITransport
     {
@@ -228,9 +228,9 @@ namespace MWCSpectatorSync.Net
             }
             if (_verbose && _log != null)
             {
-                _log.LogInfo("P2P session request from " + request.m_steamID.m_SteamID);
+                _log.LogInfo("P2P session request from " + request.m_steamIDRemote.m_SteamID);
             }
-            SteamNetworking.AcceptP2PSessionWithUser(request.m_steamID);
+            SteamNetworking.AcceptP2PSessionWithUser(request.m_steamIDRemote);
         }
 
         private void OnSessionConnectFail(P2PSessionConnectFail_t fail)

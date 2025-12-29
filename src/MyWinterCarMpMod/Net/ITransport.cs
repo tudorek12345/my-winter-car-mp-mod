@@ -1,7 +1,7 @@
 using System;
-using MWCSpectatorSync.Config;
+using MyWinterCarMpMod.Config;
 
-namespace MWCSpectatorSync.Net
+namespace MyWinterCarMpMod.Net
 {
     public struct TransportPacket
     {
