@@ -1,4 +1,4 @@
-# MWC Spectator Sync (MVP)
+# My Winter Car MP Mod (MVP)
 
 Adds a Steam P2P spectator mode for "My Winter Car" (Unity Mono). The spectator camera follows the host camera and syncs level changes plus a simple progress marker. Spectator sync first; full co-op later. This is just starting and trying to make it work.
 
@@ -6,11 +6,6 @@ Adds a Steam P2P spectator mode for "My Winter Car" (Unity Mono). The spectator 
 - My Winter Car installed and launched via Steam
 - BepInEx 5 (Mono, x64)
 - Steamworks.NET available in the game's Managed folder (or adjust references)
-
-## Install
-1. Build `MWCSpectatorSync.dll` from `src/MWCSpectatorSync/MWCSpectatorSync.csproj`.
-2. Copy the DLL to `<GameDir>\BepInEx\plugins\MWCSpectatorSync\`.
-3. Launch the game once to generate the config at `BepInEx\config\com.tudor.mwcspectatorsync.cfg`.
 
 ## Host Steps
 1. Set `Mode = Host`.
