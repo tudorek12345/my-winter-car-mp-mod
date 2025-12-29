@@ -1,4 +1,5 @@
-# My Winter Car Multiplayer Mod (WIP)
+# <img width="1056" height="946" alt="image-removebg-preview" src="https://github.com/user-attachments/assets/62184b8b-d419-4166-a875-3862906b61c0" />
+My Winter Car Multiplayer Mod (WIP)
 
 Adds a two-player co-op prototype for "My Winter Car" (Unity Mono). The build syncs player presence (position + view) as a remote avatar, plus level changes and a simple progress marker. Full co-op/world sync comes later.
 
