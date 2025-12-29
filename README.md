@@ -1,4 +1,5 @@
-# My Winter Car Multiplayer Mod 
+# ![image](https://github.com/user-attachments/assets/1085e08b-5915-42eb-8d81-0d1796616115)
+My Winter Car Multiplayer Mod v0.0.1 WIP
 
 Adds a Steam P2P Multiplayer / spectator for "My Winter Car" (Unity Mono). The spectator camera follows the host camera and syncs level changes plus a simple progress marker. Spectator sync first; full co-op later. This is just starting and trying to make it work.
 
