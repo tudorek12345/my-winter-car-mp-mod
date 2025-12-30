@@ -181,7 +181,7 @@ namespace MyWinterCarMpMod.Net
                 if (now >= _nextLevelSyncTime)
                 {
                     _nextLevelSyncTime = now + _settings.GetLevelSyncIntervalSeconds();
-                    SendLevelChange(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName);
+                    SendLevelChangeInternal(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, false);
                     DebugLog.Verbose("Level resync sent. Level=" + _levelSync.CurrentLevelName + " Index=" + _levelSync.CurrentLevelIndex);
                 }
             }
@@ -199,13 +199,7 @@ namespace MyWinterCarMpMod.Net
 
         public void SendLevelChange(int levelIndex, string levelName)
         {
-            if (!_connected)
-            {
-                return;
-            }
-            byte[] payload = Protocol.BuildLevelChange(_sessionId, levelIndex, levelName);
-            _transport.Send(payload, _settings.ReliableForControl.Value);
-            DebugLog.Verbose("LevelChange sent. Session=" + _sessionId + " Index=" + levelIndex + " Name=" + levelName);
+            SendLevelChangeInternal(levelIndex, levelName, true);
         }
 
         private void HandlePacket(TransportPacket packet)
@@ -228,6 +222,7 @@ namespace MyWinterCarMpMod.Net
                 {
                     _log.LogWarning("Host parse failed: " + error);
                 }
+                DebugLog.Warn("Host parse failed: " + error + " (len=" + packet.Length + ")");
                 return;
             }
 
@@ -235,6 +230,7 @@ namespace MyWinterCarMpMod.Net
             {
                 if (!_connected)
                 {
+                    DebugLog.Verbose("Dropped " + message.Type + " (not connected).");
                     return;
                 }
                 if (message.SessionId != _sessionId)
@@ -243,6 +239,7 @@ namespace MyWinterCarMpMod.Net
                     {
                         _log.LogWarning("Ignored packet from stale session " + message.SessionId);
                     }
+                    DebugLog.Verbose("Dropped " + message.Type + " (session mismatch " + message.SessionId + " != " + _sessionId + ").");
                     return;
                 }
             }
@@ -347,7 +344,7 @@ namespace MyWinterCarMpMod.Net
 
             DebugLog.Info("HelloAck sent. Session=" + _sessionId + " SendHz=" + _settings.GetSendHzClamped());
 
-            SendLevelChange(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName);
+            SendLevelChangeInternal(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, true);
             if (!string.IsNullOrEmpty(_progressMarker))
             {
                 _transport.Send(Protocol.BuildProgressMarker(_sessionId, _progressMarker), _settings.ReliableForControl.Value);
@@ -437,7 +434,7 @@ namespace MyWinterCarMpMod.Net
             byte[] ack = Protocol.BuildHelloAck(0ul, 0, _sessionId, _settings.GetSendHzClamped());
             _transport.Send(ack, true);
 
-            SendLevelChange(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName);
+            SendLevelChangeInternal(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, true);
             if (!string.IsNullOrEmpty(_progressMarker))
             {
                 _transport.Send(Protocol.BuildProgressMarker(_sessionId, _progressMarker), _settings.ReliableForControl.Value);
@@ -450,6 +447,25 @@ namespace MyWinterCarMpMod.Net
                 _log.LogInfo("TCP client connected (implicit handshake).");
             }
             DebugLog.Info("TCP client connected (implicit handshake). Session=" + _sessionId);
+        }
+
+        private void SendLevelChangeInternal(int levelIndex, string levelName, bool logInfo)
+        {
+            if (!_connected)
+            {
+                return;
+            }
+            byte[] payload = Protocol.BuildLevelChange(_sessionId, levelIndex, levelName);
+            _transport.Send(payload, _settings.ReliableForControl.Value);
+
+            if (logInfo)
+            {
+                DebugLog.Info("LevelChange sent. Session=" + _sessionId + " Index=" + levelIndex + " Name=" + levelName);
+            }
+            else
+            {
+                DebugLog.Verbose("LevelChange sent. Session=" + _sessionId + " Index=" + levelIndex + " Name=" + levelName);
+            }
         }
 
         private static bool IsNewerSequence(uint seq, uint last)

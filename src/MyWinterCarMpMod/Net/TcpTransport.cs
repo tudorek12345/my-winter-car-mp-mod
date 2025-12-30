@@ -301,6 +301,7 @@ namespace MyWinterCarMpMod.Net
                 {
                     _log.LogWarning("TCP read loop error: " + ex.Message);
                 }
+                DebugLog.Warn("TCP read loop error: " + ex.Message);
             }
             finally
             {

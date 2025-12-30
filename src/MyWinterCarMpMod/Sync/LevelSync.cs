@@ -252,6 +252,7 @@ namespace MyWinterCarMpMod.Sync
             if (_hostLevelChanged != null)
             {
                 _hostLevelChanged(levelIndex, levelName);
+                DebugLog.Info("Host level changed. Index=" + levelIndex + " Name=" + levelName);
             }
 
             if (_isLoading && MatchesTarget(levelIndex, levelName))

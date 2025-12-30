@@ -196,6 +196,7 @@ namespace MyWinterCarMpMod.Net
                 {
                     _log.LogWarning("Client parse failed: " + error);
                 }
+                DebugLog.Warn("Client parse failed: " + error + " (len=" + packet.Length + ")");
                 return;
             }
 
@@ -203,6 +204,7 @@ namespace MyWinterCarMpMod.Net
             {
                 if (!_connected)
                 {
+                    DebugLog.Verbose("Dropped " + message.Type + " (not connected).");
                     return;
                 }
                 if (message.SessionId != _sessionId)
@@ -211,6 +213,7 @@ namespace MyWinterCarMpMod.Net
                     {
                         _log.LogWarning("Ignored packet from stale session " + message.SessionId);
                     }
+                    DebugLog.Verbose("Dropped " + message.Type + " (session mismatch " + message.SessionId + " != " + _sessionId + ").");
                     return;
                 }
             }
