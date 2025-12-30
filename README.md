@@ -3,7 +3,8 @@ My Winter Car Multiplayer Mod (WIP)
 
 
 CURRENT STATUS: INGAME 
-<img width="1271" height="672" alt="image" src="https://github.com/user-attachments/assets/29681de9-e444-4139-9b6b-d69a8addb011" />
+<img width="1267" height="697" alt="image" src="https://github.com/user-attachments/assets/94f9fc03-6071-4a5f-b855-8c95d658f65c" />
+/>
 
 ## Requirements
 - My Winter Car installed and launched via Steam
