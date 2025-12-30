@@ -86,6 +86,7 @@ namespace MyWinterCarMpMod.Net
                 _thread.IsBackground = true;
                 _thread.Start();
                 _status = "TCP host listening on " + _bindIp + ":" + _port;
+                DebugLog.Info("TCP host listening on " + _bindIp + ":" + _port);
                 return true;
             }
             catch (Exception ex)
@@ -114,6 +115,7 @@ namespace MyWinterCarMpMod.Net
                 _thread.IsBackground = true;
                 _thread.Start();
                 _status = "TCP connected to " + _hostIp + ":" + _port;
+                DebugLog.Info("TCP connected to " + _hostIp + ":" + _port);
                 return true;
             }
             catch (Exception ex)
@@ -202,6 +204,7 @@ namespace MyWinterCarMpMod.Net
                 {
                     _log.LogWarning(_status);
                 }
+                DebugLog.Warn(_status);
                 CloseClient();
                 return false;
             }
@@ -242,6 +245,7 @@ namespace MyWinterCarMpMod.Net
                     _client = client;
                     _stream = _client.GetStream();
                     _status = "TCP client connected.";
+                    DebugLog.Info("TCP client connected.");
                     ReadLoop();
                 }
                 catch (SocketException)
@@ -285,22 +289,9 @@ namespace MyWinterCarMpMod.Net
                         Length = payload.Length
                     };
 
-                    if (MainThreadDispatcher.IsReady)
+                    lock (_incomingLock)
                     {
-                        MainThreadDispatcher.Enqueue(delegate
-                        {
-                            lock (_incomingLock)
-                            {
-                                _incoming.Enqueue(packet);
-                            }
-                        });
-                    }
-                    else
-                    {
-                        lock (_incomingLock)
-                        {
-                            _incoming.Enqueue(packet);
-                        }
+                        _incoming.Enqueue(packet);
                     }
                 }
             }
@@ -317,6 +308,7 @@ namespace MyWinterCarMpMod.Net
                 {
                     _log.LogInfo("TCP read loop ended.");
                 }
+                DebugLog.Verbose("TCP read loop ended. IsHost=" + _isHost);
                 CloseClient();
                 if (_isHost && _running)
                 {

@@ -1,0 +1,23 @@
+# Build output
+bin/
+obj/
+*.cache
+*.pdb
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# VS Code
+.vscode/
+
+# Rider/IDEA
+.idea/
+
+# Temp/logs
+.tmp/
+*.log
+*.tmp

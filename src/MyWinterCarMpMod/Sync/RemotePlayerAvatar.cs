@@ -7,10 +7,16 @@ namespace MyWinterCarMpMod.Sync
     {
         private GameObject _avatar;
         private bool _initialized;
+        private long _lastStateTimeMs;
 
         public void Update(PlayerStateData state, bool hasState, bool allowApply, float positionSmoothing, float rotationSmoothing)
         {
             if (!allowApply || !hasState)
+            {
+                return;
+            }
+
+            if (state.UnixTimeMs > 0 && state.UnixTimeMs <= _lastStateTimeMs)
             {
                 return;
             }
@@ -30,11 +36,13 @@ namespace MyWinterCarMpMod.Sync
                 t.position = targetPos;
                 t.rotation = targetRot;
                 _initialized = true;
+                _lastStateTimeMs = state.UnixTimeMs;
                 return;
             }
 
             t.position = Vector3.Lerp(t.position, targetPos, posLerp);
             t.rotation = Quaternion.Slerp(t.rotation, targetRot, rotLerp);
+            _lastStateTimeMs = state.UnixTimeMs;
         }
 
         public void Clear()
@@ -45,6 +53,7 @@ namespace MyWinterCarMpMod.Sync
                 _avatar = null;
             }
             _initialized = false;
+            _lastStateTimeMs = 0;
         }
 
         private void EnsureAvatar()

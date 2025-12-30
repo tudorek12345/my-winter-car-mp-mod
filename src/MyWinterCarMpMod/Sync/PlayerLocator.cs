@@ -198,7 +198,7 @@ namespace MyWinterCarMpMod.Sync
                 return true;
             }
 
-            return HasAnyComponent(cam, PlayerCameraComponentNames);
+            return HasAnyComponent(cam.gameObject, PlayerCameraComponentNames);
         }
 
         private static bool HasAnyComponent(GameObject obj, string[] typeNames)

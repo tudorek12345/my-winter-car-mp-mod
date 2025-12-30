@@ -1,7 +1,10 @@
 using System;
+using System.Reflection;
 using BepInEx;
+using HarmonyLib;
 using MyWinterCarMpMod.Config;
 using MyWinterCarMpMod.Net;
+using MyWinterCarMpMod.Patches;
 using MyWinterCarMpMod.Sync;
 using MyWinterCarMpMod.UI;
 using MyWinterCarMpMod.Util;
@@ -12,6 +15,8 @@ namespace MyWinterCarMpMod
     [BepInPlugin("com.tudor.mywintercarmpmod", "My Winter Car MP Mod", "0.1.0")]
     public sealed class Plugin : BaseUnityPlugin
     {
+        internal static bool AllowMultipleInstances;
+
         private Settings _settings;
         private Overlay _overlay;
         private LevelSync _levelSync;
@@ -19,6 +24,13 @@ namespace MyWinterCarMpMod
         private ClientSession _clientSession;
         private RemotePlayerAvatar _remoteAvatar;
         private ITransport _transport;
+        private LanDiscovery _lanDiscovery;
+        private Vector2 _lanScroll;
+
+        private string _menuSteamIdText;
+        private string _menuHostIpText;
+        private string _menuHostPortText;
+        private string _menuMessage;
 
         private bool _overlayVisible;
         private string _transportWarning;
@@ -27,17 +39,25 @@ namespace MyWinterCarMpMod
 
         private string _buildId;
         private string _modVersion;
+        private Harmony _harmony;
 
         private void Awake()
         {
             _settings = new Settings();
             _settings.Bind(Config, Logger);
+            AllowMultipleInstances = _settings.AllowMultipleInstances.Value;
+            ApplyHarmonyPatches();
+
+            DebugLog.Initialize(Logger, _settings.VerboseLogging.Value);
+            DebugLog.Info("Plugin awake. Version=" + Info.Metadata.Version + " BuildId=" + Application.version + "|" + Application.unityVersion);
+            DebugLog.Info("Mode=" + _settings.Mode.Value + " Transport=" + _settings.Transport.Value + " HostPort=" + _settings.HostPort.Value + " DiscoveryPort=" + _settings.LanDiscoveryPort.Value);
 
             _overlay = new Overlay();
             _remoteAvatar = new RemotePlayerAvatar();
             _overlayVisible = _settings.OverlayEnabled.Value;
             _buildId = Application.version + "|" + Application.unityVersion;
             _modVersion = Info.Metadata.Version.ToString();
+            InitializeMenuFields();
 
             MainThreadDispatcher.Initialize();
 
@@ -54,7 +74,10 @@ namespace MyWinterCarMpMod
 
         private void Update()
         {
+            AllowMultipleInstances = _settings.AllowMultipleInstances.Value;
+            DebugLog.SetVerbose(_settings.VerboseLogging.Value);
             HandleHotkeys();
+            UpdateLanDiscovery();
 
             if (_transport != null)
             {
@@ -82,6 +105,8 @@ namespace MyWinterCarMpMod
         {
             OverlayState state = BuildOverlayState();
             _overlay.Draw(state);
+            DrawMainMenuPanel();
+            DrawLanPanel();
         }
 
         private void OnDestroy()
@@ -107,6 +132,17 @@ namespace MyWinterCarMpMod
             {
                 _remoteAvatar.Clear();
             }
+            if (_lanDiscovery != null)
+            {
+                _lanDiscovery.Dispose();
+                _lanDiscovery = null;
+            }
+            if (_harmony != null)
+            {
+                _harmony.UnpatchSelf();
+                _harmony = null;
+            }
+            DebugLog.Dispose();
         }
 
         private void HandleHotkeys()
@@ -150,10 +186,15 @@ namespace MyWinterCarMpMod
 
         private void StartHost()
         {
+            if (_clientSession != null && _clientSession.IsRunning)
+            {
+                _clientSession.Disconnect();
+            }
             ResetTransport();
             _transport = CreateTransport();
             _hostSession = new HostSession(_transport, _settings, _levelSync, Logger, _buildId, _modVersion);
             _hostSession.Start();
+            DebugLog.Info("Host started. Transport=" + _transport.Kind);
             if (_remoteAvatar != null)
             {
                 _remoteAvatar.Clear();
@@ -174,10 +215,15 @@ namespace MyWinterCarMpMod
 
         private void StartClient()
         {
+            if (_hostSession != null && _hostSession.IsRunning)
+            {
+                _hostSession.Stop();
+            }
             ResetTransport();
             _transport = CreateTransport();
             _clientSession = new ClientSession(_transport, _settings, _levelSync, Logger, _buildId, _modVersion);
             _clientSession.Connect();
+            DebugLog.Info("Client connect requested. Transport=" + _transport.Kind);
             if (_remoteAvatar != null)
             {
                 _remoteAvatar.Clear();
@@ -291,9 +337,9 @@ namespace MyWinterCarMpMod
 
             if (_settings.Mode.Value == Mode.Host)
             {
-                if (_hostSession != null && _hostSession.IsRunning)
+                if (_hostSession != null)
                 {
-                    state.Status = _hostSession.IsConnected ? "Hosting (client connected)" : "Hosting (waiting)";
+                    state.Status = _hostSession.Status;
                     if (_hostSession.ClientSteamId != 0)
                     {
                         state.RemoteSteamId = _hostSession.ClientSteamId.ToString();
@@ -314,9 +360,9 @@ namespace MyWinterCarMpMod
             }
             else if (_settings.Mode.Value == Mode.Client)
             {
-                if (_clientSession != null && _clientSession.IsRunning)
+                if (_clientSession != null)
                 {
-                    state.Status = _clientSession.IsConnected ? "Connected" : "Connecting";
+                    state.Status = _clientSession.Status;
                     state.RemoteSteamId = _clientSession.HostSteamId != 0 ? _clientSession.HostSteamId.ToString() : _settings.SpectatorHostSteamId.Value.ToString();
                     state.ProgressMarker = _clientSession.ProgressMarker;
                     state.ServerSendHz = _clientSession.ServerSendHz;
@@ -341,6 +387,401 @@ namespace MyWinterCarMpMod
             }
 
             return state;
+        }
+
+        private void UpdateLanDiscovery()
+        {
+            if (!_settings.LanDiscoveryEnabled.Value)
+            {
+                if (_lanDiscovery != null)
+                {
+                    _lanDiscovery.Dispose();
+                    _lanDiscovery = null;
+                }
+                return;
+            }
+
+            EnsureLanDiscovery();
+            int discoveryPort = _settings.LanDiscoveryPort.Value;
+            TransportKind activeTransport = _transport != null ? _transport.Kind : _settings.Transport.Value;
+
+            if (_settings.Mode.Value == Mode.Host)
+            {
+                if (_hostSession != null && _hostSession.IsRunning && activeTransport == TransportKind.TcpLan)
+                {
+                    _lanDiscovery.StopListening();
+                    _lanDiscovery.BroadcastHost(discoveryPort, _settings.HostPort.Value, _buildId, _modVersion, _settings.GetLanBroadcastIntervalSeconds());
+                }
+                else
+                {
+                    _lanDiscovery.StopListening();
+                }
+            }
+            else if (_settings.Mode.Value == Mode.Client)
+            {
+                _lanDiscovery.StartListening(discoveryPort);
+                _lanDiscovery.Prune(TimeSpan.FromSeconds(_settings.GetLanHostTimeoutSeconds()));
+            }
+            else
+            {
+                _lanDiscovery.StopListening();
+            }
+        }
+
+        private void EnsureLanDiscovery()
+        {
+            if (_lanDiscovery == null)
+            {
+                _lanDiscovery = new LanDiscovery(Logger, _settings.VerboseLogging.Value);
+            }
+        }
+
+        private void DrawLanPanel()
+        {
+            if (!_overlayVisible || !_settings.OverlayEnabled.Value)
+            {
+                return;
+            }
+
+            if (IsMainMenuScene() && _settings.MainMenuPanelEnabled.Value)
+            {
+                return;
+            }
+
+            if (!_settings.LanDiscoveryEnabled.Value)
+            {
+                return;
+            }
+
+            if (_settings.Mode.Value != Mode.Client)
+            {
+                return;
+            }
+
+            EnsureLanDiscovery();
+            LanHostInfo[] hosts = _lanDiscovery.GetHostsSnapshot();
+
+            Rect area = new Rect(10f, 260f, 520f, 220f);
+            GUILayout.BeginArea(area, GUI.skin.box);
+            GUILayout.Label("LAN Hosts");
+
+            if (hosts.Length == 0)
+            {
+                GUILayout.Label("No hosts discovered.");
+            }
+            else
+            {
+                _lanScroll = GUILayout.BeginScrollView(_lanScroll, false, true);
+                for (int i = 0; i < hosts.Length; i++)
+                {
+                    LanHostInfo host = hosts[i];
+                    string label = host.Address + ":" + host.Port;
+                    if (!string.IsNullOrEmpty(host.ModVersion))
+                    {
+                        label += "  v" + host.ModVersion;
+                    }
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label(label);
+                    if (GUILayout.Button("Join", GUILayout.Width(60f)))
+                    {
+                        ConnectLanHost(host);
+                    }
+                    GUILayout.EndHorizontal();
+                }
+                GUILayout.EndScrollView();
+            }
+
+            GUILayout.EndArea();
+        }
+
+        private void ConnectLanHost(LanHostInfo host)
+        {
+            _settings.Mode.Value = Mode.Client;
+            _settings.Transport.Value = TransportKind.TcpLan;
+            _settings.SpectatorHostIP.Value = host.Address;
+            _settings.HostPort.Value = host.Port;
+
+            if (_clientSession != null && _clientSession.IsRunning)
+            {
+                _clientSession.Disconnect();
+            }
+
+            StartClient();
+        }
+
+        private void DrawMainMenuPanel()
+        {
+            if (!_settings.MainMenuPanelEnabled.Value)
+            {
+                return;
+            }
+
+            if (!IsMainMenuScene())
+            {
+                return;
+            }
+
+            float width = Mathf.Min(520f, Screen.width - 20f);
+            float height = Mathf.Min(340f, Screen.height - 20f);
+            float y = (_overlayVisible && _settings.OverlayEnabled.Value) ? 260f : 10f;
+            if (y + height > Screen.height - 10f)
+            {
+                y = Mathf.Max(10f, Screen.height - height - 10f);
+            }
+
+            Rect area = new Rect(10f, y, width, height);
+            GUILayout.BeginArea(area, GUI.skin.box);
+            GUILayout.Label("Co-op");
+
+            string status = "Idle";
+            if (_settings.Mode.Value == Mode.Host && _hostSession != null)
+            {
+                status = _hostSession.Status;
+            }
+            else if (_settings.Mode.Value == Mode.Client && _clientSession != null)
+            {
+                status = _clientSession.Status;
+            }
+            GUILayout.Label("Mode: " + _settings.Mode.Value + "  Transport: " + _settings.Transport.Value);
+            GUILayout.Label("Status: " + status);
+
+            Mode currentMode = _settings.Mode.Value;
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Mode", GUILayout.Width(80f));
+            bool hostSelected = currentMode == Mode.Host;
+            bool clientSelected = currentMode == Mode.Client;
+            if (GUILayout.Toggle(hostSelected, "Host", GUI.skin.button) && !hostSelected)
+            {
+                _settings.Mode.Value = Mode.Host;
+            }
+            if (GUILayout.Toggle(clientSelected, "Client", GUI.skin.button) && !clientSelected)
+            {
+                _settings.Mode.Value = Mode.Client;
+            }
+            GUILayout.EndHorizontal();
+
+            TransportKind currentTransport = _settings.Transport.Value;
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Transport", GUILayout.Width(80f));
+            bool steamSelected = currentTransport == TransportKind.SteamP2P;
+            bool lanSelected = currentTransport == TransportKind.TcpLan;
+            if (GUILayout.Toggle(steamSelected, "Steam P2P", GUI.skin.button) && !steamSelected)
+            {
+                _settings.Transport.Value = TransportKind.SteamP2P;
+            }
+            if (GUILayout.Toggle(lanSelected, "LAN (TCP)", GUI.skin.button) && !lanSelected)
+            {
+                _settings.Transport.Value = TransportKind.TcpLan;
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            string hostLabel = (_hostSession != null && _hostSession.IsRunning) ? "Stop Host" : "Host Game";
+            if (GUILayout.Button(hostLabel, GUILayout.Width(120f)))
+            {
+                if (_hostSession != null && _hostSession.IsRunning)
+                {
+                    _hostSession.Stop();
+                }
+                else
+                {
+                    _settings.Mode.Value = Mode.Host;
+                    StartHost();
+                }
+            }
+
+            bool clientRunning = _clientSession != null && _clientSession.IsRunning;
+            GUI.enabled = clientRunning;
+            if (GUILayout.Button("Disconnect", GUILayout.Width(120f)))
+            {
+                _clientSession.Disconnect();
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(4f);
+            GUILayout.Label("Join via Steam (Client)");
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("SteamID64", GUILayout.Width(80f));
+            _menuSteamIdText = GUILayout.TextField(_menuSteamIdText ?? string.Empty, GUILayout.Width(200f));
+            if (GUILayout.Button("Join Steam", GUILayout.Width(120f)))
+            {
+                JoinSteamFromMenu();
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.Label("Join via LAN (Client)");
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("IP", GUILayout.Width(30f));
+            _menuHostIpText = GUILayout.TextField(_menuHostIpText ?? string.Empty, GUILayout.Width(140f));
+            GUILayout.Label("Port", GUILayout.Width(40f));
+            _menuHostPortText = GUILayout.TextField(_menuHostPortText ?? string.Empty, GUILayout.Width(60f));
+            if (GUILayout.Button("Join LAN", GUILayout.Width(120f)))
+            {
+                JoinLanFromMenu();
+            }
+            GUILayout.EndHorizontal();
+
+            bool allowMulti = _settings.AllowMultipleInstances.Value;
+            bool newAllowMulti = GUILayout.Toggle(allowMulti, "Allow multiple instances (skip Steam bootstrap)");
+            if (newAllowMulti != allowMulti)
+            {
+                _settings.AllowMultipleInstances.Value = newAllowMulti;
+                AllowMultipleInstances = newAllowMulti;
+            }
+            GUILayout.Label("Restart required for Steam changes.");
+
+            if (!string.IsNullOrEmpty(_menuMessage))
+            {
+                GUILayout.Label(_menuMessage);
+            }
+
+            GUILayout.Space(4f);
+            GUILayout.Label("LAN Hosts");
+            if (!_settings.LanDiscoveryEnabled.Value)
+            {
+                GUILayout.Label("LAN discovery disabled.");
+            }
+            else
+            {
+                EnsureLanDiscovery();
+                LanHostInfo[] hosts = _lanDiscovery.GetHostsSnapshot();
+                if (hosts.Length == 0)
+                {
+                    GUILayout.Label("No hosts discovered.");
+                }
+                else
+                {
+                    _lanScroll = GUILayout.BeginScrollView(_lanScroll, false, true, GUILayout.Height(90f));
+                    for (int i = 0; i < hosts.Length; i++)
+                    {
+                        LanHostInfo host = hosts[i];
+                        string label = host.Address + ":" + host.Port;
+                        if (!string.IsNullOrEmpty(host.ModVersion))
+                        {
+                            label += "  v" + host.ModVersion;
+                        }
+                        GUILayout.BeginHorizontal();
+                        GUILayout.Label(label);
+                        if (GUILayout.Button("Join", GUILayout.Width(60f)))
+                        {
+                            ConnectLanHost(host);
+                        }
+                        GUILayout.EndHorizontal();
+                    }
+                    GUILayout.EndScrollView();
+                }
+            }
+
+            GUILayout.EndArea();
+        }
+
+        private void InitializeMenuFields()
+        {
+            _menuSteamIdText = _settings.SpectatorHostSteamId.Value.ToString();
+            _menuHostIpText = _settings.SpectatorHostIP.Value;
+            _menuHostPortText = _settings.HostPort.Value.ToString();
+            _menuMessage = string.Empty;
+        }
+
+        private void JoinSteamFromMenu()
+        {
+            ulong steamId;
+            if (!TryParseSteamId(_menuSteamIdText, out steamId))
+            {
+                _menuMessage = "Invalid SteamID64.";
+                return;
+            }
+
+            _menuMessage = string.Empty;
+            _settings.Mode.Value = Mode.Client;
+            _settings.Transport.Value = TransportKind.SteamP2P;
+            _settings.SpectatorHostSteamId.Value = steamId;
+            StartClient();
+        }
+
+        private void JoinLanFromMenu()
+        {
+            int port;
+            if (!TryParsePort(_menuHostPortText, out port))
+            {
+                _menuMessage = "Invalid LAN port.";
+                return;
+            }
+            if (string.IsNullOrEmpty(_menuHostIpText))
+            {
+                _menuMessage = "LAN IP required.";
+                return;
+            }
+
+            _menuMessage = string.Empty;
+            _settings.Mode.Value = Mode.Client;
+            _settings.Transport.Value = TransportKind.TcpLan;
+            _settings.SpectatorHostIP.Value = _menuHostIpText.Trim();
+            _settings.HostPort.Value = port;
+            StartClient();
+        }
+
+        private static bool TryParseSteamId(string text, out ulong steamId)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                steamId = 0;
+                return false;
+            }
+            return ulong.TryParse(text.Trim(), out steamId) && steamId != 0;
+        }
+
+        private static bool TryParsePort(string text, out int port)
+        {
+            if (!int.TryParse(text, out port))
+            {
+                return false;
+            }
+            if (port <= 0 || port > 65535)
+            {
+                return false;
+            }
+            return true;
+        }
+
+        private bool IsMainMenuScene()
+        {
+            if (_levelSync == null)
+            {
+                return false;
+            }
+
+            string name = _levelSync.CurrentLevelName;
+            if (string.IsNullOrEmpty(name))
+            {
+                return false;
+            }
+
+            string normalized = name.Replace(" ", string.Empty);
+            return string.Equals(normalized, "MainMenu", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void ApplyHarmonyPatches()
+        {
+            if (_harmony != null)
+            {
+                return;
+            }
+
+            _harmony = new Harmony("com.tudor.mywintercarmpmod");
+
+            MethodBase restartMethod = AccessTools.Method("Steamworks.SteamAPI:RestartAppIfNecessary");
+            if (restartMethod != null)
+            {
+                _harmony.Patch(restartMethod, prefix: new HarmonyMethod(typeof(SteamPatches), "RestartAppIfNecessaryPrefix"));
+            }
+
+            MethodBase initMethod = AccessTools.Method("Steamworks.SteamAPI:Init");
+            if (initMethod != null)
+            {
+                _harmony.Patch(initMethod, prefix: new HarmonyMethod(typeof(SteamPatches), "SteamApiInitPrefix"));
+            }
         }
     }
 }

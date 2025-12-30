@@ -39,6 +39,10 @@
       <HintPath>$(BepInExDir)\core\BepInEx.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExDir)\core\0Harmony.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="UnityEngine">
       <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
       <Private>False</Private>
@@ -64,14 +68,17 @@
     <Compile Include="Net\ITransport.cs" />
     <Compile Include="Net\SteamP2PTransport.cs" />
     <Compile Include="Net\TcpTransport.cs" />
+    <Compile Include="Net\LanDiscovery.cs" />
     <Compile Include="Net\HostSession.cs" />
     <Compile Include="Net\ClientSession.cs" />
+    <Compile Include="Patches\SteamPatches.cs" />
     <Compile Include="Sync\CameraFollower.cs" />
     <Compile Include="Sync\LevelSync.cs" />
     <Compile Include="Sync\PlayerLocator.cs" />
     <Compile Include="Sync\RemotePlayerAvatar.cs" />
     <Compile Include="UI\Overlay.cs" />
     <Compile Include="Util\MainThreadDispatcher.cs" />
+    <Compile Include="Util\DebugLog.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

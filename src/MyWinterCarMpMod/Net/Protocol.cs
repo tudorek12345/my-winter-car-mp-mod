@@ -14,12 +14,14 @@ namespace MyWinterCarMpMod.Net
         Ping = 6,
         Pong = 7,
         Disconnect = 8,
-        PlayerState = 9
+        PlayerState = 9,
+        HelloReject = 10
     }
 
     public struct HelloData
     {
         public ulong SenderSteamId;
+        public uint ClientNonce;
         public string BuildId;
         public string ModVersion;
     }
@@ -27,11 +29,21 @@ namespace MyWinterCarMpMod.Net
     public struct HelloAckData
     {
         public ulong HostSteamId;
+        public uint ClientNonce;
+        public uint SessionId;
         public int ServerSendHz;
+    }
+
+    public struct HelloRejectData
+    {
+        public uint ClientNonce;
+        public string Reason;
     }
 
     public struct CameraStateData
     {
+        public uint SessionId;
+        public uint Sequence;
         public long UnixTimeMs;
         public float PosX;
         public float PosY;
@@ -45,6 +57,8 @@ namespace MyWinterCarMpMod.Net
 
     public struct PlayerStateData
     {
+        public uint SessionId;
+        public uint Sequence;
         public long UnixTimeMs;
         public float PosX;
         public float PosY;
@@ -55,24 +69,42 @@ namespace MyWinterCarMpMod.Net
         public float ViewRotW;
     }
 
+    public struct PingData
+    {
+        public uint SessionId;
+        public long UnixTimeMs;
+    }
+
+    public struct PongData
+    {
+        public uint SessionId;
+        public long UnixTimeMs;
+    }
+
     public struct LevelChangeData
     {
+        public uint SessionId;
         public int LevelIndex;
         public string LevelName;
     }
 
     public struct ProgressMarkerData
     {
+        public uint SessionId;
         public string Marker;
     }
 
     public sealed class NetMessage
     {
         public MessageType Type;
+        public uint SessionId;
         public HelloData Hello;
         public HelloAckData HelloAck;
+        public HelloRejectData HelloReject;
         public CameraStateData CameraState;
         public PlayerStateData PlayerState;
+        public PingData Ping;
+        public PongData Pong;
         public LevelChangeData LevelChange;
         public ProgressMarkerData ProgressMarker;
     }
@@ -80,31 +112,46 @@ namespace MyWinterCarMpMod.Net
     public static class Protocol
     {
         public const uint Magic = 0x4D575331;
-        public const ushort Version = 1;
+        public const ushort Version = 2;
         private const int MaxStringBytes = 4096;
         private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
-        public static byte[] BuildHello(ulong senderSteamId, string buildId, string modVersion)
+        public static byte[] BuildHello(ulong senderSteamId, uint clientNonce, string buildId, string modVersion)
         {
             using (MemoryStream stream = new MemoryStream(128))
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 WriteHeader(writer, MessageType.Hello);
                 writer.Write(senderSteamId);
+                writer.Write(clientNonce);
                 WriteString(writer, buildId);
                 WriteString(writer, modVersion);
                 return stream.ToArray();
             }
         }
 
-        public static byte[] BuildHelloAck(ulong hostSteamId, int serverSendHz)
+        public static byte[] BuildHelloAck(ulong hostSteamId, uint clientNonce, uint sessionId, int serverSendHz)
         {
             using (MemoryStream stream = new MemoryStream(64))
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 WriteHeader(writer, MessageType.HelloAck);
                 writer.Write(hostSteamId);
+                writer.Write(clientNonce);
+                writer.Write(sessionId);
                 writer.Write(serverSendHz);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildHelloReject(uint clientNonce, string reason)
+        {
+            using (MemoryStream stream = new MemoryStream(128))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.HelloReject);
+                writer.Write(clientNonce);
+                WriteString(writer, reason);
                 return stream.ToArray();
             }
         }
@@ -115,6 +162,8 @@ namespace MyWinterCarMpMod.Net
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 WriteHeader(writer, MessageType.CameraState);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
                 writer.Write(state.UnixTimeMs);
                 writer.Write(state.PosX);
                 writer.Write(state.PosY);
@@ -134,6 +183,8 @@ namespace MyWinterCarMpMod.Net
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 WriteHeader(writer, MessageType.PlayerState);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
                 writer.Write(state.UnixTimeMs);
                 writer.Write(state.PosX);
                 writer.Write(state.PosY);
@@ -146,42 +197,64 @@ namespace MyWinterCarMpMod.Net
             }
         }
 
-        public static byte[] BuildLevelChange(int levelIndex, string levelName)
+        public static byte[] BuildLevelChange(uint sessionId, int levelIndex, string levelName)
         {
             using (MemoryStream stream = new MemoryStream(128))
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 WriteHeader(writer, MessageType.LevelChange);
+                writer.Write(sessionId);
                 writer.Write(levelIndex);
                 WriteString(writer, levelName);
                 return stream.ToArray();
             }
         }
 
-        public static byte[] BuildProgressMarker(string marker)
+        public static byte[] BuildProgressMarker(uint sessionId, string marker)
         {
             using (MemoryStream stream = new MemoryStream(128))
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 WriteHeader(writer, MessageType.ProgressMarker);
+                writer.Write(sessionId);
                 WriteString(writer, marker);
                 return stream.ToArray();
             }
         }
 
-        public static byte[] BuildPing()
+        public static byte[] BuildPing(uint sessionId, long unixTimeMs)
         {
-            return BuildNoPayload(MessageType.Ping);
+            using (MemoryStream stream = new MemoryStream(24))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.Ping);
+                writer.Write(sessionId);
+                writer.Write(unixTimeMs);
+                return stream.ToArray();
+            }
         }
 
-        public static byte[] BuildPong()
+        public static byte[] BuildPong(uint sessionId, long unixTimeMs)
         {
-            return BuildNoPayload(MessageType.Pong);
+            using (MemoryStream stream = new MemoryStream(24))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.Pong);
+                writer.Write(sessionId);
+                writer.Write(unixTimeMs);
+                return stream.ToArray();
+            }
         }
 
-        public static byte[] BuildDisconnect()
+        public static byte[] BuildDisconnect(uint sessionId)
         {
-            return BuildNoPayload(MessageType.Disconnect);
+            using (MemoryStream stream = new MemoryStream(16))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.Disconnect);
+                writer.Write(sessionId);
+                return stream.ToArray();
+            }
         }
 
         public static bool TryParse(byte[] payload, int length, out NetMessage message, out string error)
@@ -225,6 +298,7 @@ namespace MyWinterCarMpMod.Net
                             result.Hello = new HelloData
                             {
                                 SenderSteamId = reader.ReadUInt64(),
+                                ClientNonce = reader.ReadUInt32(),
                                 BuildId = ReadString(reader),
                                 ModVersion = ReadString(reader)
                             };
@@ -233,12 +307,23 @@ namespace MyWinterCarMpMod.Net
                             result.HelloAck = new HelloAckData
                             {
                                 HostSteamId = reader.ReadUInt64(),
+                                ClientNonce = reader.ReadUInt32(),
+                                SessionId = reader.ReadUInt32(),
                                 ServerSendHz = reader.ReadInt32()
+                            };
+                            break;
+                        case MessageType.HelloReject:
+                            result.HelloReject = new HelloRejectData
+                            {
+                                ClientNonce = reader.ReadUInt32(),
+                                Reason = ReadString(reader)
                             };
                             break;
                         case MessageType.CameraState:
                             result.CameraState = new CameraStateData
                             {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
                                 UnixTimeMs = reader.ReadInt64(),
                                 PosX = reader.ReadSingle(),
                                 PosY = reader.ReadSingle(),
@@ -253,6 +338,8 @@ namespace MyWinterCarMpMod.Net
                         case MessageType.PlayerState:
                             result.PlayerState = new PlayerStateData
                             {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
                                 UnixTimeMs = reader.ReadInt64(),
                                 PosX = reader.ReadSingle(),
                                 PosY = reader.ReadSingle(),
@@ -266,6 +353,7 @@ namespace MyWinterCarMpMod.Net
                         case MessageType.LevelChange:
                             result.LevelChange = new LevelChangeData
                             {
+                                SessionId = reader.ReadUInt32(),
                                 LevelIndex = reader.ReadInt32(),
                                 LevelName = ReadString(reader)
                             };
@@ -273,16 +361,51 @@ namespace MyWinterCarMpMod.Net
                         case MessageType.ProgressMarker:
                             result.ProgressMarker = new ProgressMarkerData
                             {
+                                SessionId = reader.ReadUInt32(),
                                 Marker = ReadString(reader)
                             };
                             break;
                         case MessageType.Ping:
+                            result.Ping = new PingData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64()
+                            };
+                            result.SessionId = result.Ping.SessionId;
+                            break;
                         case MessageType.Pong:
+                            result.Pong = new PongData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64()
+                            };
+                            result.SessionId = result.Pong.SessionId;
+                            break;
                         case MessageType.Disconnect:
+                            result.SessionId = reader.ReadUInt32();
                             break;
                         default:
                             error = "Unknown message type.";
                             return false;
+                    }
+
+                    switch (type)
+                    {
+                        case MessageType.HelloAck:
+                            result.SessionId = result.HelloAck.SessionId;
+                            break;
+                        case MessageType.CameraState:
+                            result.SessionId = result.CameraState.SessionId;
+                            break;
+                        case MessageType.PlayerState:
+                            result.SessionId = result.PlayerState.SessionId;
+                            break;
+                        case MessageType.LevelChange:
+                            result.SessionId = result.LevelChange.SessionId;
+                            break;
+                        case MessageType.ProgressMarker:
+                            result.SessionId = result.ProgressMarker.SessionId;
+                            break;
                     }
 
                     message = result;

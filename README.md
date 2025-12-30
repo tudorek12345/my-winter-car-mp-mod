@@ -1,35 +1,48 @@
+# My Winter Car MP Mod (WIP)
 
-My Winter Car Multiplayer Mod (WIP)
+Early two-player co-op prototype for "My Winter Car" (Unity Mono). Currently syncs only player presence (position + view yaw), level changes, and a simple progress marker. This is not full co-op yet.
 
+## Current Status
+Host and client are connected in the main menu; loading into the game is still being stabilized.
 
-CURRENT STATUS: Host and Client in MAIN MENU 
-<img width="1267" height="697" alt="image" src="https://github.com/user-attachments/assets/94f9fc03-6071-4a5f-b855-8c95d658f65c" />
-/>
+![Main menu status](https://github.com/user-attachments/assets/94f9fc03-6071-4a5f-b855-8c95d658f65c)
+
+## Current Features
+- Two-player host/client.
+- Steam P2P or TCP LAN (LAN discovery + in-game join panel).
+- Main menu co-op panel + on-screen overlay.
+- Session handshake, keepalive pings, timeouts, auto-reconnect.
+- Per-instance debug logs for easier troubleshooting.
+
+## Known Limitations
+- No world/physics/vehicles/items/AI/time-of-day sync.
+- Remote player is a visual-only capsule (no collisions or interactions).
+- Level sync is still flaky; the client can remain in the main menu after host continues.
+- LAN/Steam P2P is still experimental and may require retries.
 
 ## Requirements
-- My Winter Car installed and launched via Steam
-- BepInEx 5 (Mono, x64)
-- Steamworks.NET available in the game's Managed folder (or adjust references)
+- My Winter Car (Windows).
+- BepInEx 5 (Mono, x64).
+- Steam P2P requires launching via Steam; local multi-instance testing uses LAN.
 
-## Host Steps
+## Quick Start (Main Menu)
+Host:
 1. Set `Mode = Host`.
-2. (Optional) Set `AllowOnlySteamId` to restrict to a single client SteamID64.
-3. (Optional) Set `Transport = TcpLan` to host over LAN; discovery will broadcast automatically.
-4. Press `F6` to start hosting.
-5. Share the Host SteamID64 shown in the overlay.
-6. Press `F9` to set the progress marker (timestamp + preset note).
+2. Pick `Transport = SteamP2P` or `Transport = TcpLan`.
+3. Click `Host Game` in the co-op panel (or press `F6`).
+4. Optional: press `F9` to set a progress marker.
 
-## Client Steps
+Client:
 1. Set `Mode = Client`.
-2. Set `SpectatorHostSteamId` to the host SteamID64 (Steam P2P).
-3. Press `F7` to connect.
-4. You should see a remote player avatar; press `F8` to toggle the overlay.
-5. For LAN: set `Transport = TcpLan` and use the on-screen "LAN Hosts" panel to join, or set `SpectatorHostIP` manually.
+2. Steam P2P: set `SpectatorHostSteamId` to the host SteamID64.
+3. LAN: use `Join LAN` or set `SpectatorHostIP`/`HostPort`.
+4. Click `Join Steam` or `Join LAN` (or press `F7`).
 
-## Transport
-- Default: Steam P2P. If Steam init fails or the game is not running under Steam, it auto-falls back to TCP LAN and shows a warning in the overlay.
-- TCP LAN fallback: set `HostBindIP`, `HostPort`, and `SpectatorHostIP` in config.
-- LAN discovery: host broadcasts and client listens; use the in-game LAN panel to join.
+Then the host selects Continue/New Game; the client should load into the same level.
+
+Local testing (two instances):
+- Set `Compatibility/AllowMultipleInstances = true` and restart the game.
+- This skips Steam bootstrap, so use LAN transport only.
 
 ## Config (BepInEx)
 General:
@@ -40,6 +53,12 @@ General:
 - `SmoothingRotation = 0.15`
 - `OverlayEnabled = true`
 - `VerboseLogging = false`
+
+UI:
+- `MainMenuPanelEnabled = true`
+
+Compatibility:
+- `AllowMultipleInstances = false`
 
 Steam P2P:
 - `SpectatorHostSteamId = 0`
@@ -52,8 +71,11 @@ TCP LAN:
 - `HostPort = 27055`
 - `SpectatorHostIP = 127.0.0.1`
 
-Spectator:
-- `SpectatorLockdown = true` (legacy, unused for co-op)
+LanDiscovery:
+- `Enabled = true`
+- `Port = 27056`
+- `BroadcastIntervalSeconds = 1.5`
+- `HostTimeoutSeconds = 5`
 
 Networking:
 - `ConnectionTimeoutSeconds = 10`
@@ -62,42 +84,15 @@ Networking:
 - `AutoReconnect = true`
 - `ReconnectDelaySeconds = 3`
 - `MaxReconnectAttempts = 5` (0 = infinite)
+- `LevelSyncIntervalSeconds = 5`
 
-LanDiscovery:
-- `Enabled = true`
-- `Port = 27056`
-- `BroadcastIntervalSeconds = 1.5`
-- `HostTimeoutSeconds = 5`
+Spectator:
+- `SpectatorLockdown = true` (legacy, unused in co-op)
 
-## Current Work (Now)
-- Player locator prefers main/player cameras and decompiled player controllers (`CharacterMotor`, `FPSInputController`, `FirstPersonController`) to find the local player.
-- Two-way player state sync (host <-> client) for position + view rotation.
-- Remote player avatar (capsule) with smoothing to reduce jitter.
-- Session hardening: handshake with session IDs, keepalive pings, timeouts, and auto-reconnect.
-- LAN discovery + in-game join panel for TCP LAN.
-
-## Current Scope
-- Two-player only (host + client).
-- Bidirectional player presence sync (position + view rotation).
-- Host drives level change and progress marker.
-- Steam P2P transport with TCP LAN fallback.
-- No world/physics/vehicle/inventory/AI/time-of-day sync.
-
-## Future (Full Co-op)
-- Plan is full state replication with two-way sync (players, vehicles, items, AI, physics).
-- Likely needs an authoritative host with client input replication/reconciliation for physics stability.
-- Will be built incrementally after presence sync is solid.
-
-## Known Limitations
-- No syncing of physics, vehicles, items, AI, doors, or inventory.
-- Remote player avatar is visual-only (no collisions or interactions yet).
-
-## Troubleshooting
-- Steam init failed: ensure the game is launched via Steam; fallback to TCP LAN.
-- TCP connection fails: check firewall rules for the host port (default 27055).
-- Version mismatch: ensure both players use the same mod build (Hello buildId/modVersion).
+## Logs
+- BepInEx global log: `BepInEx/LogOutput.log`
+- Per-instance mod log: `BepInEx/LogOutput_MyWinterCarMpMod_<pid>.log`
 
 ## Build Notes
 - Target framework is .NET Framework 3.5 for older Unity (Mono).
-- If your Steamworks.NET build requires 4.x, retarget the project to .NET 4.7.2 and update references accordingly.
-- Update the `GameDir` property in `src/MyWinterCarMpMod/MyWinterCarMpMod.csproj` to match your install.
+- Update `GameDir` in `src/MyWinterCarMpMod/MyWinterCarMpMod.csproj` to match your install path.

@@ -1,3 +1,0 @@
-C:\Users\tudor\my winter car mp mod\my-winter-car-mp-mod\src\MyWinterCarMpMod\obj\Release\MyWinterCarMpMod.csprojResolveAssemblyReference.cache
-C:\Users\tudor\my winter car mp mod\my-winter-car-mp-mod\src\MyWinterCarMpMod\bin\Release\MyWinterCarMpMod.dll
-C:\Users\tudor\my winter car mp mod\my-winter-car-mp-mod\src\MyWinterCarMpMod\obj\Release\MyWinterCarMpMod.dll

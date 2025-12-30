@@ -1,6 +1,7 @@
 using System;
 using System.Reflection;
 using BepInEx.Logging;
+using MyWinterCarMpMod.Util;
 using UnityEngine;
 
 namespace MyWinterCarMpMod.Sync
@@ -17,6 +18,11 @@ namespace MyWinterCarMpMod.Sync
         private string _currentLevelName = string.Empty;
         private int _targetLevelIndex = -1;
         private string _targetLevelName = string.Empty;
+        private float _loadStartTime;
+        private int _loadAttempts;
+        private bool _loadByName;
+        private bool _loadFailureLogged;
+        private const float LoadTimeoutSeconds = 6f;
 
         public LevelSync(ManualLogSource log, bool verbose)
         {
@@ -72,6 +78,27 @@ namespace MyWinterCarMpMod.Sync
                 levelName = Application.loadedLevelName;
             }
 
+            if (_isLoading)
+            {
+                float now = Time.realtimeSinceStartup;
+                if (now - _loadStartTime > LoadTimeoutSeconds)
+                {
+                    if (_loadByName && _targetLevelIndex >= 0 && _loadAttempts == 1)
+                    {
+                        _loadAttempts++;
+                        _loadStartTime = now;
+                        _loadByName = false;
+                        DebugLog.Warn("Level load timeout. Retrying by index " + _targetLevelIndex + " (name=" + _targetLevelName + ").");
+                        Application.LoadLevel(_targetLevelIndex);
+                    }
+                    else if (!_loadFailureLogged)
+                    {
+                        _loadFailureLogged = true;
+                        DebugLog.Warn("Level load still not complete. Target=" + _targetLevelName + " Index=" + _targetLevelIndex + " Current=" + levelName);
+                    }
+                }
+            }
+
             if (levelIndex != _currentLevelIndex || levelName != _currentLevelName)
             {
                 UpdateCurrent(levelIndex, levelName);
@@ -86,10 +113,15 @@ namespace MyWinterCarMpMod.Sync
             if (IsCurrentLevel(levelIndex, levelName))
             {
                 _isLoading = false;
+                DebugLog.Verbose("LevelChange ignored (already on target). Index=" + levelIndex + " Name=" + levelName);
                 return;
             }
 
             _isLoading = true;
+            _loadStartTime = Time.realtimeSinceStartup;
+            _loadAttempts = 1;
+            _loadByName = !string.IsNullOrEmpty(levelName);
+            _loadFailureLogged = false;
             if (_useSceneManager)
             {
                 _sceneManager.LoadSceneAsync(levelIndex, levelName);
@@ -110,6 +142,7 @@ namespace MyWinterCarMpMod.Sync
             {
                 _log.LogInfo("Client loading level " + levelIndex + " (" + levelName + ").");
             }
+            DebugLog.Info("Client loading level. Index=" + levelIndex + " Name=" + levelName);
         }
 
         public void Dispose()
@@ -224,6 +257,7 @@ namespace MyWinterCarMpMod.Sync
             if (_isLoading && MatchesTarget(levelIndex, levelName))
             {
                 _isLoading = false;
+                DebugLog.Info("Level load complete. Index=" + _currentLevelIndex + " Name=" + _currentLevelName);
             }
 
             if (_verbose && _log != null)

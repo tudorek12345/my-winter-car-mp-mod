@@ -25,7 +25,9 @@ namespace MyWinterCarMpMod.Config
         public ConfigEntry<float> SmoothingPosition;
         public ConfigEntry<float> SmoothingRotation;
         public ConfigEntry<bool> OverlayEnabled;
+        public ConfigEntry<bool> MainMenuPanelEnabled;
         public ConfigEntry<bool> VerboseLogging;
+        public ConfigEntry<bool> AllowMultipleInstances;
 
         public ConfigEntry<ulong> SpectatorHostSteamId;
         public ConfigEntry<ulong> AllowOnlySteamId;
@@ -38,6 +40,19 @@ namespace MyWinterCarMpMod.Config
 
         public ConfigEntry<bool> SpectatorLockdown;
 
+        public ConfigEntry<float> ConnectionTimeoutSeconds;
+        public ConfigEntry<float> HelloRetrySeconds;
+        public ConfigEntry<float> KeepAliveSeconds;
+        public ConfigEntry<bool> AutoReconnect;
+        public ConfigEntry<float> ReconnectDelaySeconds;
+        public ConfigEntry<int> MaxReconnectAttempts;
+        public ConfigEntry<float> LevelSyncIntervalSeconds;
+
+        public ConfigEntry<bool> LanDiscoveryEnabled;
+        public ConfigEntry<int> LanDiscoveryPort;
+        public ConfigEntry<float> LanBroadcastIntervalSeconds;
+        public ConfigEntry<float> LanHostTimeoutSeconds;
+
         public void Bind(ConfigFile config, ManualLogSource log)
         {
             Mode = config.Bind("General", "Mode", Config.Mode.Host, "Host or Client (co-op) mode.");
@@ -46,7 +61,9 @@ namespace MyWinterCarMpMod.Config
             SmoothingPosition = config.Bind("General", "SmoothingPosition", 0.15f, "Camera position smoothing (0-1).");
             SmoothingRotation = config.Bind("General", "SmoothingRotation", 0.15f, "Camera rotation/FOV smoothing (0-1).");
             OverlayEnabled = config.Bind("General", "OverlayEnabled", true, "Show on-screen overlay.");
+            MainMenuPanelEnabled = config.Bind("UI", "MainMenuPanelEnabled", true, "Show co-op menu panel on the main menu.");
             VerboseLogging = config.Bind("General", "VerboseLogging", false, "Enable verbose logging.");
+            AllowMultipleInstances = config.Bind("Compatibility", "AllowMultipleInstances", false, "Skip Steam restart checks and Steam API init (restart required).");
 
             SpectatorHostSteamId = config.Bind("SteamP2P", "SpectatorHostSteamId", 0ul, "Client sets host SteamID64 (0 to show in overlay).");
             AllowOnlySteamId = config.Bind("SteamP2P", "AllowOnlySteamId", 0ul, "Host allowlist SteamID64 (0 allows first client).");
@@ -58,6 +75,19 @@ namespace MyWinterCarMpMod.Config
             SpectatorHostIP = config.Bind("TcpLan", "SpectatorHostIP", "127.0.0.1", "Client target IP for fallback.");
 
             SpectatorLockdown = config.Bind("Spectator", "SpectatorLockdown", true, "Spectator-only input lockdown (unused in co-op).");
+
+            ConnectionTimeoutSeconds = config.Bind("Networking", "ConnectionTimeoutSeconds", 10f, "Seconds without packets before timing out.");
+            HelloRetrySeconds = config.Bind("Networking", "HelloRetrySeconds", 2f, "Seconds between hello retries while connecting.");
+            KeepAliveSeconds = config.Bind("Networking", "KeepAliveSeconds", 2f, "Seconds between keepalive pings.");
+            AutoReconnect = config.Bind("Networking", "AutoReconnect", true, "Auto-reconnect when disconnected.");
+            ReconnectDelaySeconds = config.Bind("Networking", "ReconnectDelaySeconds", 3f, "Seconds to wait before reconnecting.");
+            MaxReconnectAttempts = config.Bind("Networking", "MaxReconnectAttempts", 5, "Max reconnect attempts (0 = infinite).");
+            LevelSyncIntervalSeconds = config.Bind("Networking", "LevelSyncIntervalSeconds", 5f, "Seconds between host level resyncs.");
+
+            LanDiscoveryEnabled = config.Bind("LanDiscovery", "Enabled", true, "Enable LAN discovery for TCP.");
+            LanDiscoveryPort = config.Bind("LanDiscovery", "Port", 27056, "UDP discovery port.");
+            LanBroadcastIntervalSeconds = config.Bind("LanDiscovery", "BroadcastIntervalSeconds", 1.5f, "Seconds between host broadcasts.");
+            LanHostTimeoutSeconds = config.Bind("LanDiscovery", "HostTimeoutSeconds", 5f, "Seconds before expiring LAN hosts.");
 
             if (log != null)
             {
@@ -103,6 +133,51 @@ namespace MyWinterCarMpMod.Config
             return (byte)channel;
         }
 
+        public float GetConnectionTimeoutSeconds()
+        {
+            return ClampMin(ConnectionTimeoutSeconds.Value, 2f);
+        }
+
+        public float GetHelloRetrySeconds()
+        {
+            return ClampMin(HelloRetrySeconds.Value, 0.5f);
+        }
+
+        public float GetKeepAliveSeconds()
+        {
+            return ClampMin(KeepAliveSeconds.Value, 0.5f);
+        }
+
+        public float GetReconnectDelaySeconds()
+        {
+            return ClampMin(ReconnectDelaySeconds.Value, 1f);
+        }
+
+        public int GetMaxReconnectAttempts()
+        {
+            int value = MaxReconnectAttempts.Value;
+            if (value < 0)
+            {
+                return 0;
+            }
+            return value;
+        }
+
+        public float GetLevelSyncIntervalSeconds()
+        {
+            return ClampMin(LevelSyncIntervalSeconds.Value, 1f);
+        }
+
+        public float GetLanBroadcastIntervalSeconds()
+        {
+            return ClampMin(LanBroadcastIntervalSeconds.Value, 0.5f);
+        }
+
+        public float GetLanHostTimeoutSeconds()
+        {
+            return ClampMin(LanHostTimeoutSeconds.Value, 1f);
+        }
+
         private static float Clamp01(float value)
         {
             if (value < 0f)
@@ -112,6 +187,15 @@ namespace MyWinterCarMpMod.Config
             if (value > 1f)
             {
                 return 1f;
+            }
+            return value;
+        }
+
+        private static float ClampMin(float value, float min)
+        {
+            if (value < min)
+            {
+                return min;
             }
             return value;
         }
