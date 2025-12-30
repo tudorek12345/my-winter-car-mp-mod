@@ -2,7 +2,7 @@
 My Winter Car Multiplayer Mod (WIP)
 
 
-CURRENT STATUS: INGAME 
+CURRENT STATUS: BepInEx 5 loaded, in MAIN MENU 
 <img width="1267" height="697" alt="image" src="https://github.com/user-attachments/assets/94f9fc03-6071-4a5f-b855-8c95d658f65c" />
 />
 
