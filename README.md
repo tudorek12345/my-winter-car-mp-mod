@@ -1,4 +1,4 @@
-# <img width="1056" height="946" alt="image-removebg-preview" src="https://github.com/user-attachments/assets/62184b8b-d419-4166-a875-3862906b61c0" />
+
 My Winter Car Multiplayer Mod (WIP)
 
 
