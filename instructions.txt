@@ -1,0 +1,87 @@
+My Winter Car MP Mod - Developer Instructions
+============================================
+
+Scope
+- This is a two-player co-op prototype. Networking and sync are still evolving.
+- Use this doc for local iteration, build/deploy, and multi-instance testing.
+
+Repo layout
+- src/MyWinterCarMpMod: plugin source.
+- tools/: helper scripts and utilities.
+  - tools/config-templates: host/client config templates.
+  - tools/apply-config.ps1: copies template to BepInEx config.
+  - tools/launch-host-client.ps1: launches two instances.
+  - tools/UnityPlayerSettingsPatcher: optional product name override.
+- C:\Games\My.Winter.Car\decompiled: decompiled game code reference (read-only).
+
+Game installs
+- Host: C:\Games\My.Winter.Car\game
+- Client (optional separate install): C:\Games\My.Winter.Car\game_client
+- BepInEx 5 (Mono, x64) must be installed in each game folder.
+
+Build prerequisites
+- .NET SDK (dotnet).
+- BepInEx core DLLs available under GameDir\BepInEx\core.
+- Option A (clean): install .NET Framework 3.5 Developer Pack.
+- Option B (no admin): use the game's Managed folder as FrameworkPathOverride.
+
+Build (Release)
+- GameDir is defined in src/MyWinterCarMpMod/MyWinterCarMpMod.csproj.
+- You can override it per build:
+  dotnet build src/MyWinterCarMpMod/MyWinterCarMpMod.csproj -c Release -p:GameDir="C:\Games\My.Winter.Car\game"
+- If .NET 3.5 reference assemblies are missing, use:
+  dotnet build src/MyWinterCarMpMod/MyWinterCarMpMod.csproj -c Release `
+    -p:GameDir="C:\Games\My.Winter.Car\game" `
+    -p:FrameworkPathOverride="C:\Games\My.Winter.Car\game\MyWinterCar_Data\Managed"
+- Note: this can warn about System.Configuration/System.Xml. It is OK if the build succeeds.
+
+Deploy
+- Copy the output DLL into the plugin folder:
+  Copy-Item -Force src/MyWinterCarMpMod/bin/Release/MyWinterCarMpMod.dll `
+    C:\Games\My.Winter.Car\game\BepInEx\plugins\MyWinterCarMpMod\MyWinterCarMpMod.dll
+- For two instances, copy to both game and game_client plugin folders.
+
+Config workflow
+- Templates live in tools/config-templates/host.cfg and client.cfg.
+- Apply templates (overwrites the target config):
+  powershell -File tools/apply-config.ps1 -Mode Host -GameDir "C:\Games\My.Winter.Car\game" -ConfigSuffix host
+  powershell -File tools/apply-config.ps1 -Mode Client -GameDir "C:\Games\My.Winter.Car\game_client" -ConfigSuffix client
+- Config override selection:
+  - Command line: --mwc-config=host (or client)
+  - Env var: MWC_MPM_CONFIG=host
+
+Launch host + client
+- Preferred (two installs):
+  powershell -ExecutionPolicy Bypass -File tools/launch-host-client.ps1 `
+    -HostGameDir "C:\Games\My.Winter.Car\game" `
+    -ClientGameDir "C:\Games\My.Winter.Car\game_client"
+- For Steam P2P, pass -HostSteamId or set SpectatorHostSteamId in the client config.
+- Controls: F6 (host), F7 (client), F8 (overlay), F9 (marker).
+
+Multi-instance options
+- Recommended: separate installs (game + game_client).
+- AllowMultipleInstances (config) skips Steam bootstrap; use LAN only.
+- Optional single-install override:
+  - tools/UnityPlayerSettingsPatcher edits MyWinterCar_Data/mainData product name.
+  - tools/launch-host-client.ps1 supports -UseProductNameOverride.
+  - This is more fragile than separate installs.
+
+Debugging
+- Logs:
+  - BepInEx/LogOutput.log (global)
+  - BepInEx/LogOutput_MyWinterCarMpMod_<pid>.log (per instance)
+- VerboseLogging = true for detailed traces.
+- Useful tags: PlayerLocator, DoorSync, LevelChange, Hello/HelloAck.
+
+Iteration loop
+1) Edit code.
+2) Build (Release).
+3) Copy DLL to plugin folders.
+4) Restart host/client.
+5) Connect in main menu, then host continues into GAME.
+6) Check logs for state and sync.
+
+Known pitfalls
+- Build fails without .NET 3.5 refs: use FrameworkPathOverride or install the dev pack.
+- Door sync relies on hinge joints and name filters; clear DoorSync/NameFilter to include all hinges.
+- Remote avatar is visual-only (no collisions) and may drift if player locator resolves the wrong transform.

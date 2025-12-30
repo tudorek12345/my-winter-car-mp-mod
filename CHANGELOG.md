@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 - 2025-12-30
+- Experimental door hinge sync with configurable name filter.
+- Remote avatar updated to simple body primitives.
+- Player locator improvements (standard assets controllers, menu camera filtering).
+- Added UnityPlayerSettingsPatcher tool and launch script improvements.
+- Verbose logging enabled in templates and expanded debug tracing.
+- Added developer iteration guide (instructions.txt).
+
 ## 0.1.0 - 2025-12-29
 - Initial MVP with Steam P2P spectator mode.
 - TCP LAN fallback transport.

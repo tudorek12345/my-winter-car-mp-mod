@@ -1,9 +1,9 @@
 # My Winter Car MP Mod (WIP)
 
-Early two-player co-op prototype for "My Winter Car" (Unity Mono). Currently syncs only player presence (position + view yaw), level changes, and a simple progress marker. This is not full co-op yet.
+Early two-player co-op prototype for "My Winter Car" (Unity Mono). Currently syncs player presence (position + view yaw), level changes, a simple progress marker, and experimental door hinge sync. This is not full co-op yet.
 
 ## Current Status
-Host and client are connected in the main menu; loading into the game is still being stabilized.
+Host and client can connect and load into GAME; avatar and door sync are still being tuned.
 
 ![Main menu status](https://github.com/user-attachments/assets/94f9fc03-6071-4a5f-b855-8c95d658f65c)
 
@@ -12,12 +12,16 @@ Host and client are connected in the main menu; loading into the game is still b
 - Steam P2P or TCP LAN (LAN discovery + in-game join panel).
 - Main menu co-op panel + on-screen overlay.
 - Session handshake, keepalive pings, timeouts, auto-reconnect.
+- Experimental door hinge sync (name-filtered).
+- Remote avatar rendered as simple primitives.
 - Per-instance debug logs for easier troubleshooting.
+- Per-instance config overrides (`--mwc-config` or `MWC_MPM_CONFIG`).
 
 ## Known Limitations
 - No world/physics/vehicles/items/AI/time-of-day sync.
-- Remote player is a visual-only capsule (no collisions or interactions).
-- Level sync is still flaky; the client can remain in the main menu after host continues.
+- Remote player is visual-only primitives (no collisions or interactions).
+- Door sync is best-effort; some doors may ignore remote transforms.
+- Level sync is still being stabilized; clients may need retries.
 - LAN/Steam P2P is still experimental and may require retries.
 
 ## Requirements
@@ -52,7 +56,7 @@ General:
 - `SmoothingPosition = 0.15`
 - `SmoothingRotation = 0.15`
 - `OverlayEnabled = true`
-- `VerboseLogging = false`
+- `VerboseLogging = true` (set false to reduce log noise)
 
 UI:
 - `MainMenuPanelEnabled = true`
@@ -77,6 +81,12 @@ LanDiscovery:
 - `BroadcastIntervalSeconds = 1.5`
 - `HostTimeoutSeconds = 5`
 
+DoorSync:
+- `Enabled = true`
+- `SendHz = 10`
+- `AngleThreshold = 1`
+- `NameFilter = door,ovi` (empty = all hinges)
+
 Networking:
 - `ConnectionTimeoutSeconds = 10`
 - `HelloRetrySeconds = 2`
@@ -93,6 +103,15 @@ Spectator:
 - BepInEx global log: `BepInEx/LogOutput.log`
 - Per-instance mod log: `BepInEx/LogOutput_MyWinterCarMpMod_<pid>.log`
 
+## Dev Guide
+See `instructions.txt` for iteration, build, deploy, and multi-instance notes.
+
 ## Build Notes
 - Target framework is .NET Framework 3.5 for older Unity (Mono).
-- Update `GameDir` in `src/MyWinterCarMpMod/MyWinterCarMpMod.csproj` to match your install path.
+- Update `GameDir` in `src/MyWinterCarMpMod/MyWinterCarMpMod.csproj` or pass `-p:GameDir=...`.
+- If .NET 3.5 reference assemblies are missing, use the game's Managed folder:
+  ```powershell
+  dotnet build src/MyWinterCarMpMod/MyWinterCarMpMod.csproj -c Release `
+    -p:GameDir="C:\Games\My.Winter.Car\game" `
+    -p:FrameworkPathOverride="C:\Games\My.Winter.Car\game\MyWinterCar_Data\Managed"
+  ```

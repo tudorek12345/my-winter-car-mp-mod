@@ -17,6 +17,8 @@ namespace MyWinterCarMpMod.Net
         private readonly string _modVersion;
         private readonly LevelSync _levelSync;
         private readonly PlayerLocator _playerLocator = new PlayerLocator();
+        private readonly DoorSync _doorSync;
+        private readonly System.Collections.Generic.List<DoorStateData> _doorSendBuffer = new System.Collections.Generic.List<DoorStateData>(32);
 
         private bool _running;
         private bool _connected;
@@ -32,14 +34,17 @@ namespace MyWinterCarMpMod.Net
         private uint _sessionId;
         private uint _outSequence;
         private uint _lastClientSequence;
+        private uint _doorSequence;
         private PlayerStateData _latestClientState;
         private bool _hasClientState;
+        private float _nextStateLogTime;
 
-        public HostSession(ITransport transport, Settings settings, LevelSync levelSync, ManualLogSource log, string buildId, string modVersion)
+        public HostSession(ITransport transport, Settings settings, LevelSync levelSync, DoorSync doorSync, ManualLogSource log, string buildId, string modVersion)
         {
             _transport = transport;
             _settings = settings;
             _levelSync = levelSync;
+            _doorSync = doorSync;
             _log = log;
             _verbose = settings.VerboseLogging.Value;
             _buildId = buildId ?? string.Empty;
@@ -81,6 +86,12 @@ namespace MyWinterCarMpMod.Net
             get { return _status; }
         }
 
+        public void OnLocalLevelChanged()
+        {
+            _playerLocator.Clear();
+            DebugLog.Verbose("HostSession: local level changed, player locator reset.");
+        }
+
         public bool HasClientState
         {
             get { return _hasClientState; }
@@ -105,6 +116,7 @@ namespace MyWinterCarMpMod.Net
             _sessionId = 0;
             _outSequence = 0;
             _lastClientSequence = 0;
+            _doorSequence = 0;
             _hasClientState = false;
             _status = _running ? "Hosting (waiting)" : "Host failed.";
             if (_running && _log != null)
@@ -170,6 +182,7 @@ namespace MyWinterCarMpMod.Net
                 {
                     _nextSendTime = now + interval;
                     SendPlayerState();
+                    SendDoorStates(now);
                 }
 
                 if (now >= _nextPingTime)
@@ -291,6 +304,12 @@ namespace MyWinterCarMpMod.Net
                     }
                     ResetConnection("Hosting (waiting)");
                     break;
+                case MessageType.DoorState:
+                    if (_doorSync != null)
+                    {
+                        _doorSync.ApplyRemote(message.DoorState);
+                    }
+                    break;
             }
         }
 
@@ -388,6 +407,12 @@ namespace MyWinterCarMpMod.Net
             PlayerStateData state;
             if (!_playerLocator.TryGetLocalState(out state))
             {
+                float now = Time.realtimeSinceStartup;
+                if (now >= _nextStateLogTime)
+                {
+                    DebugLog.Warn("Host: local player state unavailable (not sending).");
+                    _nextStateLogTime = now + 2f;
+                }
                 return;
             }
 
@@ -396,6 +421,26 @@ namespace MyWinterCarMpMod.Net
             state.Sequence = _outSequence;
             byte[] payload = Protocol.BuildPlayerState(state);
             _transport.Send(payload, false);
+        }
+
+        private void SendDoorStates(float now)
+        {
+            if (_doorSync == null || !_doorSync.Enabled)
+            {
+                return;
+            }
+
+            long unixTimeMs = GetUnixTimeMs();
+            int count = _doorSync.CollectChanges(unixTimeMs, now, _doorSendBuffer);
+            for (int i = 0; i < count; i++)
+            {
+                DoorStateData state = _doorSendBuffer[i];
+                _doorSequence++;
+                state.SessionId = _sessionId;
+                state.Sequence = _doorSequence;
+                byte[] payload = Protocol.BuildDoorState(state);
+                _transport.Send(payload, false);
+            }
         }
 
         private void SendDisconnect()

@@ -8,6 +8,7 @@ namespace MyWinterCarMpMod.Sync
         private GameObject _avatar;
         private bool _initialized;
         private long _lastStateTimeMs;
+        private Renderer[] _renderers;
 
         public void Update(PlayerStateData state, bool hasState, bool allowApply, float positionSmoothing, float rotationSmoothing)
         {
@@ -63,20 +64,51 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
-            _avatar = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            _avatar.name = "MWC Remote Player";
+            _avatar = new GameObject("MWC Remote Player");
             Object.DontDestroyOnLoad(_avatar);
 
-            Collider collider = _avatar.GetComponent<Collider>();
+            GameObject body = CreatePrimitiveChild(_avatar.transform, "Body", PrimitiveType.Capsule, new Vector3(0f, 0.9f, 0f), new Vector3(0.45f, 0.9f, 0.45f));
+            GameObject head = CreatePrimitiveChild(_avatar.transform, "Head", PrimitiveType.Sphere, new Vector3(0f, 1.55f, 0f), new Vector3(0.3f, 0.3f, 0.3f));
+            CreatePrimitiveChild(_avatar.transform, "Hip", PrimitiveType.Cube, new Vector3(0f, 0.55f, 0f), new Vector3(0.35f, 0.2f, 0.25f));
+            CreatePrimitiveChild(_avatar.transform, "ArmL", PrimitiveType.Cube, new Vector3(-0.3f, 1.1f, 0f), new Vector3(0.15f, 0.45f, 0.15f));
+            CreatePrimitiveChild(_avatar.transform, "ArmR", PrimitiveType.Cube, new Vector3(0.3f, 1.1f, 0f), new Vector3(0.15f, 0.45f, 0.15f));
+
+            _renderers = _avatar.GetComponentsInChildren<Renderer>(true);
+            SetColor(new Color(0.2f, 0.8f, 1f, 0.9f));
+        }
+
+        private static GameObject CreatePrimitiveChild(Transform parent, string name, PrimitiveType type, Vector3 localPos, Vector3 localScale)
+        {
+            GameObject obj = GameObject.CreatePrimitive(type);
+            obj.name = name;
+            obj.transform.SetParent(parent, false);
+            obj.transform.localPosition = localPos;
+            obj.transform.localScale = localScale;
+
+            Collider collider = obj.GetComponent<Collider>();
             if (collider != null)
             {
                 collider.enabled = false;
             }
 
-            Renderer renderer = _avatar.GetComponent<Renderer>();
-            if (renderer != null)
+            return obj;
+        }
+
+        private void SetColor(Color color)
+        {
+            if (_renderers == null)
             {
-                renderer.material.color = new Color(0.2f, 0.8f, 1f, 0.9f);
+                return;
+            }
+
+            for (int i = 0; i < _renderers.Length; i++)
+            {
+                Renderer renderer = _renderers[i];
+                if (renderer == null)
+                {
+                    continue;
+                }
+                renderer.material.color = color;
             }
         }
 

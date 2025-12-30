@@ -40,6 +40,11 @@ namespace MyWinterCarMpMod.Config
 
         public ConfigEntry<bool> SpectatorLockdown;
 
+        public ConfigEntry<bool> DoorSyncEnabled;
+        public ConfigEntry<int> DoorSendHz;
+        public ConfigEntry<float> DoorAngleThreshold;
+        public ConfigEntry<string> DoorNameFilter;
+
         public ConfigEntry<float> ConnectionTimeoutSeconds;
         public ConfigEntry<float> HelloRetrySeconds;
         public ConfigEntry<float> KeepAliveSeconds;
@@ -75,6 +80,11 @@ namespace MyWinterCarMpMod.Config
             SpectatorHostIP = config.Bind("TcpLan", "SpectatorHostIP", "127.0.0.1", "Client target IP for fallback.");
 
             SpectatorLockdown = config.Bind("Spectator", "SpectatorLockdown", true, "Spectator-only input lockdown (unused in co-op).");
+
+            DoorSyncEnabled = config.Bind("DoorSync", "Enabled", true, "Sync door hinge states between host/client.");
+            DoorSendHz = config.Bind("DoorSync", "SendHz", 10, "Door state send rate in Hz (1-30).");
+            DoorAngleThreshold = config.Bind("DoorSync", "AngleThreshold", 1.0f, "Minimum angle change (degrees) before sending.");
+            DoorNameFilter = config.Bind("DoorSync", "NameFilter", "door,ovi", "Case-insensitive name filter for door objects (empty = all hinges). Comma-separated tokens.");
 
             ConnectionTimeoutSeconds = config.Bind("Networking", "ConnectionTimeoutSeconds", 10f, "Seconds without packets before timing out.");
             HelloRetrySeconds = config.Bind("Networking", "HelloRetrySeconds", 2f, "Seconds between hello retries while connecting.");
@@ -166,6 +176,30 @@ namespace MyWinterCarMpMod.Config
         public float GetLevelSyncIntervalSeconds()
         {
             return ClampMin(LevelSyncIntervalSeconds.Value, 1f);
+        }
+
+        public int GetDoorSendHz()
+        {
+            int hz = DoorSendHz.Value;
+            if (hz < 1)
+            {
+                hz = 1;
+            }
+            if (hz > 30)
+            {
+                hz = 30;
+            }
+            return hz;
+        }
+
+        public float GetDoorAngleThreshold()
+        {
+            return ClampMin(DoorAngleThreshold.Value, 0.1f);
+        }
+
+        public string GetDoorNameFilter()
+        {
+            return DoorNameFilter.Value ?? string.Empty;
         }
 
         public float GetLanBroadcastIntervalSeconds()

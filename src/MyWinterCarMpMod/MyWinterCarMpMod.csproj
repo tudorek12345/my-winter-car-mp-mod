@@ -73,6 +73,7 @@
     <Compile Include="Net\ClientSession.cs" />
     <Compile Include="Patches\SteamPatches.cs" />
     <Compile Include="Sync\CameraFollower.cs" />
+    <Compile Include="Sync\DoorSync.cs" />
     <Compile Include="Sync\LevelSync.cs" />
     <Compile Include="Sync\PlayerLocator.cs" />
     <Compile Include="Sync\RemotePlayerAvatar.cs" />

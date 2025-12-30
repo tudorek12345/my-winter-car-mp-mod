@@ -3,7 +3,8 @@ param(
     [ValidateSet("Host", "Client")]
     [string]$Mode,
     [UInt64]$HostSteamId = 0,
-    [string]$GameDir = "C:\\Games\\My.Winter.Car\\game"
+    [string]$GameDir = "C:\\Games\\My.Winter.Car\\game",
+    [string]$ConfigSuffix = ""
 )
 
 $templatesDir = Join-Path $PSScriptRoot "config-templates"
@@ -14,7 +15,12 @@ if (!(Test-Path $templatePath))
 }
 
 $configDir = Join-Path $GameDir "BepInEx\\config"
-$configPath = Join-Path $configDir "com.tudor.mywintercarmpmod.cfg"
+$configFile = "com.tudor.mywintercarmpmod.cfg"
+if ($ConfigSuffix)
+{
+    $configFile = "com.tudor.mywintercarmpmod.$ConfigSuffix.cfg"
+}
+$configPath = Join-Path $configDir $configFile
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 Copy-Item -Path $templatePath -Destination $configPath -Force
 

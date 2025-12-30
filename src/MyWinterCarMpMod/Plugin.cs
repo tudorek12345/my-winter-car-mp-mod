@@ -1,6 +1,8 @@
 using System;
+using System.IO;
 using System.Reflection;
 using BepInEx;
+using BepInEx.Configuration;
 using HarmonyLib;
 using MyWinterCarMpMod.Config;
 using MyWinterCarMpMod.Net;
@@ -23,6 +25,7 @@ namespace MyWinterCarMpMod
         private HostSession _hostSession;
         private ClientSession _clientSession;
         private RemotePlayerAvatar _remoteAvatar;
+        private DoorSync _doorSync;
         private ITransport _transport;
         private LanDiscovery _lanDiscovery;
         private Vector2 _lanScroll;
@@ -40,11 +43,19 @@ namespace MyWinterCarMpMod
         private string _buildId;
         private string _modVersion;
         private Harmony _harmony;
+        private bool _steamPatchPending;
+        private bool _steamRestartPatched;
+        private bool _steamInitPatched;
+        private bool _steamManagerAwakePatched;
+        private string _configSuffix;
+        private int _lastLevelIndex = int.MinValue;
+        private string _lastLevelName = string.Empty;
 
         private void Awake()
         {
             _settings = new Settings();
-            _settings.Bind(Config, Logger);
+            ConfigFile config = ResolveConfigFile();
+            _settings.Bind(config, Logger);
             AllowMultipleInstances = _settings.AllowMultipleInstances.Value;
             ApplyHarmonyPatches();
 
@@ -54,6 +65,7 @@ namespace MyWinterCarMpMod
 
             _overlay = new Overlay();
             _remoteAvatar = new RemotePlayerAvatar();
+            _doorSync = new DoorSync(_settings);
             _overlayVisible = _settings.OverlayEnabled.Value;
             _buildId = Application.version + "|" + Application.unityVersion;
             _modVersion = Info.Metadata.Version.ToString();
@@ -87,6 +99,14 @@ namespace MyWinterCarMpMod
             if (_levelSync != null)
             {
                 _levelSync.Update();
+                HandleLocalLevelChange();
+            }
+
+            if (_doorSync != null && _levelSync != null)
+            {
+                bool allowScan = !IsMainMenuScene();
+                _doorSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
+                _doorSync.Update(Time.realtimeSinceStartup);
             }
 
             if (_settings.Mode.Value == Mode.Host && _hostSession != null)
@@ -131,6 +151,10 @@ namespace MyWinterCarMpMod
             if (_remoteAvatar != null)
             {
                 _remoteAvatar.Clear();
+            }
+            if (_doorSync != null)
+            {
+                _doorSync.Clear();
             }
             if (_lanDiscovery != null)
             {
@@ -192,7 +216,7 @@ namespace MyWinterCarMpMod
             }
             ResetTransport();
             _transport = CreateTransport();
-            _hostSession = new HostSession(_transport, _settings, _levelSync, Logger, _buildId, _modVersion);
+            _hostSession = new HostSession(_transport, _settings, _levelSync, _doorSync, Logger, _buildId, _modVersion);
             _hostSession.Start();
             DebugLog.Info("Host started. Transport=" + _transport.Kind);
             if (_remoteAvatar != null)
@@ -221,7 +245,7 @@ namespace MyWinterCarMpMod
             }
             ResetTransport();
             _transport = CreateTransport();
-            _clientSession = new ClientSession(_transport, _settings, _levelSync, Logger, _buildId, _modVersion);
+            _clientSession = new ClientSession(_transport, _settings, _levelSync, _doorSync, Logger, _buildId, _modVersion);
             _clientSession.Connect();
             DebugLog.Info("Client connect requested. Transport=" + _transport.Kind);
             if (_remoteAvatar != null)
@@ -284,6 +308,12 @@ namespace MyWinterCarMpMod
             }
 
             bool allowApply = _levelSync.IsReady;
+            if (!allowApply || IsMainMenuScene())
+            {
+                _remoteAvatar.Clear();
+                return;
+            }
+
             if (_settings.Mode.Value == Mode.Host)
             {
                 if (_hostSession == null || !_hostSession.IsConnected)
@@ -314,6 +344,38 @@ namespace MyWinterCarMpMod
             {
                 _remoteAvatar.Clear();
             }
+        }
+
+        private void HandleLocalLevelChange()
+        {
+            if (_levelSync == null)
+            {
+                return;
+            }
+
+            int levelIndex = _levelSync.CurrentLevelIndex;
+            string levelName = _levelSync.CurrentLevelName ?? string.Empty;
+            if (levelIndex == _lastLevelIndex && string.Equals(levelName, _lastLevelName, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _lastLevelIndex = levelIndex;
+            _lastLevelName = levelName;
+
+            if (_hostSession != null)
+            {
+                _hostSession.OnLocalLevelChanged();
+            }
+            if (_clientSession != null)
+            {
+                _clientSession.OnLocalLevelChanged();
+            }
+            if (_remoteAvatar != null)
+            {
+                _remoteAvatar.Clear();
+            }
+            DebugLog.Verbose("Local level changed. Index=" + levelIndex + " Name=" + levelName);
         }
 
         private void OnHostLevelChanged(int levelIndex, string levelName)
@@ -771,17 +833,177 @@ namespace MyWinterCarMpMod
 
             _harmony = new Harmony("com.tudor.mywintercarmpmod");
 
-            MethodBase restartMethod = AccessTools.Method("Steamworks.SteamAPI:RestartAppIfNecessary");
-            if (restartMethod != null)
+            bool patchedAll = TryPatchSteamMethods();
+            if (!patchedAll)
             {
-                _harmony.Patch(restartMethod, prefix: new HarmonyMethod(typeof(SteamPatches), "RestartAppIfNecessaryPrefix"));
+                HookSteamAssemblyLoad();
+            }
+        }
+
+        private bool TryPatchSteamMethods()
+        {
+            bool missing = false;
+
+            if (!_steamRestartPatched)
+            {
+                MethodBase restartMethod = AccessTools.Method("Steamworks.SteamAPI:RestartAppIfNecessary");
+                if (restartMethod != null)
+                {
+                    _harmony.Patch(restartMethod, prefix: new HarmonyMethod(typeof(SteamPatches), "RestartAppIfNecessaryPrefix"));
+                    _steamRestartPatched = true;
+                    if (Logger != null)
+                    {
+                        Logger.LogInfo("Patched Steamworks.SteamAPI:RestartAppIfNecessary");
+                    }
+                }
+                else
+                {
+                    missing = true;
+                }
             }
 
-            MethodBase initMethod = AccessTools.Method("Steamworks.SteamAPI:Init");
-            if (initMethod != null)
+            if (!_steamInitPatched)
             {
-                _harmony.Patch(initMethod, prefix: new HarmonyMethod(typeof(SteamPatches), "SteamApiInitPrefix"));
+                MethodBase initMethod = AccessTools.Method("Steamworks.SteamAPI:Init");
+                if (initMethod != null)
+                {
+                    _harmony.Patch(initMethod, prefix: new HarmonyMethod(typeof(SteamPatches), "SteamApiInitPrefix"));
+                    _steamInitPatched = true;
+                    if (Logger != null)
+                    {
+                        Logger.LogInfo("Patched Steamworks.SteamAPI:Init");
+                    }
+                }
+                else
+                {
+                    missing = true;
+                }
             }
+
+            if (!_steamManagerAwakePatched)
+            {
+                MethodBase awakeMethod = AccessTools.Method("SteamManager:Awake");
+                if (awakeMethod != null)
+                {
+                    _harmony.Patch(awakeMethod, prefix: new HarmonyMethod(typeof(SteamPatches), "SteamManagerAwakePrefix"));
+                    _steamManagerAwakePatched = true;
+                    if (Logger != null)
+                    {
+                        Logger.LogInfo("Patched SteamManager:Awake");
+                    }
+                }
+                else
+                {
+                    missing = true;
+                }
+            }
+
+            return !missing;
+        }
+
+        private void HookSteamAssemblyLoad()
+        {
+            if (_steamPatchPending)
+            {
+                return;
+            }
+
+            _steamPatchPending = true;
+            AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
+            if (Logger != null)
+            {
+                Logger.LogInfo("Steam API not loaded yet; waiting to apply patches.");
+            }
+        }
+
+        private void OnAssemblyLoad(object sender, AssemblyLoadEventArgs args)
+        {
+            if (!_steamPatchPending)
+            {
+                return;
+            }
+
+            if (TryPatchSteamMethods())
+            {
+                _steamPatchPending = false;
+                AppDomain.CurrentDomain.AssemblyLoad -= OnAssemblyLoad;
+                if (Logger != null)
+                {
+                    Logger.LogInfo("Steam API patches applied after assembly load.");
+                }
+            }
+        }
+
+        private ConfigFile ResolveConfigFile()
+        {
+            string suffix = ResolveConfigSuffix();
+            if (string.IsNullOrEmpty(suffix))
+            {
+                return Config;
+            }
+
+            string sanitized = SanitizeConfigSuffix(suffix);
+            _configSuffix = sanitized;
+            string fileName = "com.tudor.mywintercarmpmod." + sanitized + ".cfg";
+            string path = Path.Combine(Paths.ConfigPath, fileName);
+            if (Logger != null)
+            {
+                Logger.LogInfo("Using config override: " + path);
+            }
+            return new ConfigFile(path, true);
+        }
+
+        private static string ResolveConfigSuffix()
+        {
+            string env = Environment.GetEnvironmentVariable("MWC_MPM_CONFIG");
+            if (!string.IsNullOrEmpty(env))
+            {
+                return env;
+            }
+
+            string[] args = Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length; i++)
+            {
+                string arg = args[i];
+                if (arg == null)
+                {
+                    continue;
+                }
+                if (arg.StartsWith("--mwc-config=", StringComparison.OrdinalIgnoreCase))
+                {
+                    return arg.Substring("--mwc-config=".Length);
+                }
+                if (arg.Equals("--mwc-config", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    return args[i + 1];
+                }
+            }
+
+            return null;
+        }
+
+        private static string SanitizeConfigSuffix(string suffix)
+        {
+            if (string.IsNullOrEmpty(suffix))
+            {
+                return null;
+            }
+
+            char[] chars = suffix.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                char c = chars[i];
+                bool ok = (c >= 'a' && c <= 'z') ||
+                          (c >= 'A' && c <= 'Z') ||
+                          (c >= '0' && c <= '9') ||
+                          c == '_' ||
+                          c == '-';
+                if (!ok)
+                {
+                    chars[i] = '_';
+                }
+            }
+            return new string(chars);
         }
     }
 }

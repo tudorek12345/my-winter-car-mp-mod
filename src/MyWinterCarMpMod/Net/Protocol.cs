@@ -15,7 +15,8 @@ namespace MyWinterCarMpMod.Net
         Pong = 7,
         Disconnect = 8,
         PlayerState = 9,
-        HelloReject = 10
+        HelloReject = 10,
+        DoorState = 11
     }
 
     public struct HelloData
@@ -94,6 +95,18 @@ namespace MyWinterCarMpMod.Net
         public string Marker;
     }
 
+    public struct DoorStateData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public long UnixTimeMs;
+        public uint DoorId;
+        public float RotX;
+        public float RotY;
+        public float RotZ;
+        public float RotW;
+    }
+
     public sealed class NetMessage
     {
         public MessageType Type;
@@ -107,12 +120,13 @@ namespace MyWinterCarMpMod.Net
         public PongData Pong;
         public LevelChangeData LevelChange;
         public ProgressMarkerData ProgressMarker;
+        public DoorStateData DoorState;
     }
 
     public static class Protocol
     {
         public const uint Magic = 0x4D575331;
-        public const ushort Version = 2;
+        public const ushort Version = 3;
         private const int MaxStringBytes = 4096;
         private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
@@ -257,6 +271,24 @@ namespace MyWinterCarMpMod.Net
             }
         }
 
+        public static byte[] BuildDoorState(DoorStateData state)
+        {
+            using (MemoryStream stream = new MemoryStream(48))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.DoorState);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
+                writer.Write(state.UnixTimeMs);
+                writer.Write(state.DoorId);
+                writer.Write(state.RotX);
+                writer.Write(state.RotY);
+                writer.Write(state.RotZ);
+                writer.Write(state.RotW);
+                return stream.ToArray();
+            }
+        }
+
         public static bool TryParse(byte[] payload, int length, out NetMessage message, out string error)
         {
             message = null;
@@ -384,6 +416,19 @@ namespace MyWinterCarMpMod.Net
                         case MessageType.Disconnect:
                             result.SessionId = reader.ReadUInt32();
                             break;
+                        case MessageType.DoorState:
+                            result.DoorState = new DoorStateData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64(),
+                                DoorId = reader.ReadUInt32(),
+                                RotX = reader.ReadSingle(),
+                                RotY = reader.ReadSingle(),
+                                RotZ = reader.ReadSingle(),
+                                RotW = reader.ReadSingle()
+                            };
+                            break;
                         default:
                             error = "Unknown message type.";
                             return false;
@@ -405,6 +450,9 @@ namespace MyWinterCarMpMod.Net
                             break;
                         case MessageType.ProgressMarker:
                             result.SessionId = result.ProgressMarker.SessionId;
+                            break;
+                        case MessageType.DoorState:
+                            result.SessionId = result.DoorState.SessionId;
                             break;
                     }
 
@@ -454,7 +502,7 @@ namespace MyWinterCarMpMod.Net
             int length = reader.ReadInt32();
             if (length < 0 || length > MaxStringBytes)
             {
-                throw new InvalidDataException("Invalid string length.");
+                throw new IOException("Invalid string length.");
             }
             if (length == 0)
             {
