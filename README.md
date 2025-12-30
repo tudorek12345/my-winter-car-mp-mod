@@ -14,19 +14,22 @@ CURRENT STATUS: Host and Client in MAIN MENU
 ## Host Steps
 1. Set `Mode = Host`.
 2. (Optional) Set `AllowOnlySteamId` to restrict to a single client SteamID64.
-3. Press `F6` to start hosting.
-4. Share the Host SteamID64 shown in the overlay.
-5. Press `F9` to set the progress marker (timestamp + preset note).
+3. (Optional) Set `Transport = TcpLan` to host over LAN; discovery will broadcast automatically.
+4. Press `F6` to start hosting.
+5. Share the Host SteamID64 shown in the overlay.
+6. Press `F9` to set the progress marker (timestamp + preset note).
 
 ## Client Steps
 1. Set `Mode = Client`.
 2. Set `SpectatorHostSteamId` to the host SteamID64 (Steam P2P).
 3. Press `F7` to connect.
 4. You should see a remote player avatar; press `F8` to toggle the overlay.
+5. For LAN: set `Transport = TcpLan` and use the on-screen "LAN Hosts" panel to join, or set `SpectatorHostIP` manually.
 
 ## Transport
 - Default: Steam P2P. If Steam init fails or the game is not running under Steam, it auto-falls back to TCP LAN and shows a warning in the overlay.
 - TCP LAN fallback: set `HostBindIP`, `HostPort`, and `SpectatorHostIP` in config.
+- LAN discovery: host broadcasts and client listens; use the in-game LAN panel to join.
 
 ## Config (BepInEx)
 General:
@@ -52,10 +55,26 @@ TCP LAN:
 Spectator:
 - `SpectatorLockdown = true` (legacy, unused for co-op)
 
+Networking:
+- `ConnectionTimeoutSeconds = 10`
+- `HelloRetrySeconds = 2`
+- `KeepAliveSeconds = 2`
+- `AutoReconnect = true`
+- `ReconnectDelaySeconds = 3`
+- `MaxReconnectAttempts = 5` (0 = infinite)
+
+LanDiscovery:
+- `Enabled = true`
+- `Port = 27056`
+- `BroadcastIntervalSeconds = 1.5`
+- `HostTimeoutSeconds = 5`
+
 ## Current Work (Now)
 - Player locator prefers main/player cameras and decompiled player controllers (`CharacterMotor`, `FPSInputController`, `FirstPersonController`) to find the local player.
 - Two-way player state sync (host <-> client) for position + view rotation.
 - Remote player avatar (capsule) with smoothing to reduce jitter.
+- Session hardening: handshake with session IDs, keepalive pings, timeouts, and auto-reconnect.
+- LAN discovery + in-game join panel for TCP LAN.
 
 ## Current Scope
 - Two-player only (host + client).
