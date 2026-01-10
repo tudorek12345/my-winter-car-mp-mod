@@ -5,7 +5,8 @@ Early two-player co-op prototype for "My Winter Car" (Unity Mono). Currently syn
 ## Current Status
 (Both players) Host and client can now connect in game, host sees client via very primitive capsule/rig for now.
 
-
+OFFICIAL DISCORD
+https://discord.gg/GQeC5tCH2w
 
 
 ## Current Features
