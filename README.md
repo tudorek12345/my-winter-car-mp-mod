@@ -3,7 +3,7 @@
 Early two-player co-op prototype for "My Winter Car" (Unity Mono). Currently syncs player presence (position + view yaw), level changes, a simple progress marker, and experimental door hinge sync. This is not full co-op yet.
 
 ## Current Status
-(Both players) Host and client can now connect in game, host sees client via very primitive capsule/rig for now.
+Host and client can connect in-game and both see the remote capsule rig. Interior room doors and the cabin front entrance sync. The cabin back door is still not syncing, and vehicle doors can jitter/jump the car when opened.
 
 OFFICIAL DISCORD
 https://discord.gg/GQeC5tCH2w
@@ -14,7 +14,7 @@ https://discord.gg/GQeC5tCH2w
 - Steam P2P or TCP LAN (LAN discovery + in-game join panel).
 - Main menu co-op panel + on-screen overlay.
 - Session handshake, keepalive pings, timeouts, auto-reconnect.
-- Experimental door hinge sync (name-filtered).
+- Door sync via PlayMaker events + hinge rotation (experimental).
 - Remote avatar rendered as simple primitives.
 - Per-instance debug logs for easier troubleshooting.
 - Per-instance config overrides (`--mwc-config` or `MWC_MPM_CONFIG`).
@@ -22,7 +22,8 @@ https://discord.gg/GQeC5tCH2w
 ## Known Limitations
 - No world/physics/vehicles/items/AI/time-of-day sync.
 - Remote player is visual-only primitives (no collisions or interactions).
-- Door sync is best-effort; some doors may ignore remote transforms.
+- Door sync is best-effort; the cabin back door does not sync yet.
+- Vehicle doors can cause physics jitter/jumps on the remote car.
 - Level sync is still being stabilized; clients may need retries.
 - LAN/Steam P2P is still experimental and may require retries.
 

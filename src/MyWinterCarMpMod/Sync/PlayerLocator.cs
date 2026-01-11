@@ -121,7 +121,7 @@ namespace MyWinterCarMpMod.Sync
             if (IsViewValid(_cachedView) && IsBodyValid(_cachedBody))
             {
                 Camera cachedCam = _cachedView != null ? _cachedView.GetComponent<Camera>() : null;
-                if (cachedCam == null || IsCameraUsable(cachedCam))
+                if ((cachedCam == null || IsCameraUsable(cachedCam)) && IsLikelyPlayerTransform(_cachedBody, _cachedView))
                 {
                     body = _cachedBody;
                     view = _cachedView;
@@ -139,14 +139,30 @@ namespace MyWinterCarMpMod.Sync
             Transform playerRoot = FindPlayerRoot();
             if (playerRoot != null)
             {
+                Transform playerView = FindCameraUnder(playerRoot);
+                if (!IsLikelyPlayerTransform(playerRoot, playerView))
+                {
+                    playerRoot = null;
+                    playerView = null;
+                }
+
                 body = playerRoot;
-                view = FindCameraUnder(playerRoot);
+                view = playerView;
+
+                if (view != null && !IsInActiveScene(view))
+                {
+                    view = null;
+                }
             }
 
             if (view == null)
             {
                 Camera cam = GetBestCamera();
                 view = cam != null ? cam.transform : null;
+                if (view != null && !IsInActiveScene(view))
+                {
+                    view = null;
+                }
             }
 
             if (body == null)
@@ -182,6 +198,10 @@ namespace MyWinterCarMpMod.Sync
                 GameObject tagged = GameObject.FindGameObjectWithTag("Player");
                 if (tagged != null)
                 {
+                    if (!IsInActiveScene(tagged.transform))
+                    {
+                        return null;
+                    }
                     return tagged.transform;
                 }
             }
@@ -203,6 +223,10 @@ namespace MyWinterCarMpMod.Sync
                 GameObject obj = GameObject.Find(names[i]);
                 if (obj != null)
                 {
+                    if (!IsInActiveScene(obj.transform))
+                    {
+                        continue;
+                    }
                     return obj.transform;
                 }
             }
@@ -218,7 +242,7 @@ namespace MyWinterCarMpMod.Sync
             }
 
             Camera cam = root.GetComponentInChildren<Camera>();
-            if (cam != null)
+            if (IsCameraUsable(cam))
             {
                 return cam.transform;
             }
@@ -234,6 +258,10 @@ namespace MyWinterCarMpMod.Sync
                 CharacterController controller = controllers[i];
                 if (controller != null && controller.enabled && controller.gameObject.activeInHierarchy)
                 {
+                    if (!IsInActiveScene(controller.transform))
+                    {
+                        continue;
+                    }
                     return controller.transform;
                 }
             }
@@ -243,6 +271,10 @@ namespace MyWinterCarMpMod.Sync
             {
                 Rigidbody body = bodies[i];
                 if (body == null || !body.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+                if (!IsInActiveScene(body.transform))
                 {
                     continue;
                 }
@@ -300,6 +332,10 @@ namespace MyWinterCarMpMod.Sync
             Transform current = view;
             while (current != null)
             {
+                if (!IsInActiveScene(current))
+                {
+                    return null;
+                }
                 if (current.GetComponent<CharacterController>() != null)
                 {
                     return current;
@@ -315,17 +351,21 @@ namespace MyWinterCarMpMod.Sync
 
         private static bool IsViewValid(Transform view)
         {
-            return view != null && view.gameObject.activeInHierarchy;
+            return view != null && view.gameObject.activeInHierarchy && IsInActiveScene(view);
         }
 
         private static bool IsBodyValid(Transform body)
         {
-            return body != null && body.gameObject.activeInHierarchy;
+            return body != null && body.gameObject.activeInHierarchy && IsInActiveScene(body);
         }
 
         private static bool IsCameraUsable(Camera cam)
         {
             if (cam == null || !cam.enabled || !cam.gameObject.activeInHierarchy)
+            {
+                return false;
+            }
+            if (!IsInActiveScene(cam.transform))
             {
                 return false;
             }
@@ -356,6 +396,39 @@ namespace MyWinterCarMpMod.Sync
 
             return HasAnyComponentOnParents(cam.transform, PlayerCameraComponentNames) ||
                    HasAnyComponentOnParents(cam.transform, PlayerBodyComponentNames);
+        }
+
+        private static bool IsLikelyPlayerTransform(Transform body, Transform view)
+        {
+            if (body != null)
+            {
+                if (body.GetComponent<CharacterController>() != null)
+                {
+                    return true;
+                }
+                if (HasAnyComponent(body.gameObject, PlayerBodyComponentNames))
+                {
+                    return true;
+                }
+                if (HasAnyComponentOnParents(body, PlayerBodyComponentNames))
+                {
+                    return true;
+                }
+            }
+
+            if (view != null)
+            {
+                if (HasAnyComponentOnParents(view, PlayerCameraComponentNames))
+                {
+                    return true;
+                }
+                if (HasAnyComponentOnParents(view, PlayerBodyComponentNames))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool HasAnyComponent(GameObject obj, string[] typeNames)
@@ -443,6 +516,15 @@ namespace MyWinterCarMpMod.Sync
             int depth = 0;
             while (current != null && depth < 6)
             {
+                string name = current.name;
+                if (!string.IsNullOrEmpty(name))
+                {
+                    if (name.IndexOf("GUI", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        name.IndexOf("MENU", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        return true;
+                    }
+                }
                 if (current.GetComponent("StartGame") != null || current.GetComponent("SettingsMenu") != null)
                 {
                     return true;
@@ -462,6 +544,77 @@ namespace MyWinterCarMpMod.Sync
             }
             string normalized = levelName.Replace(" ", string.Empty);
             return string.Equals(normalized, "MainMenu", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsInActiveScene(Transform transform)
+        {
+            if (transform == null || transform.gameObject == null)
+            {
+                return false;
+            }
+
+            string activeName = Application.loadedLevelName ?? string.Empty;
+            if (string.IsNullOrEmpty(activeName))
+            {
+                return true;
+            }
+
+            string sceneName = TryGetSceneName(transform.gameObject);
+            if (string.IsNullOrEmpty(sceneName))
+            {
+                return true;
+            }
+
+            if (string.Equals(sceneName, activeName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (string.Equals(sceneName, "DontDestroyOnLoad", StringComparison.OrdinalIgnoreCase))
+            {
+                if (HasAnyComponent(transform.gameObject, PlayerBodyComponentNames) ||
+                    HasAnyComponent(transform.gameObject, PlayerCameraComponentNames))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string TryGetSceneName(GameObject obj)
+        {
+            if (obj == null)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                PropertyInfo sceneProp = obj.GetType().GetProperty("scene");
+                if (sceneProp == null)
+                {
+                    return string.Empty;
+                }
+
+                object scene = sceneProp.GetValue(obj, null);
+                if (scene == null)
+                {
+                    return string.Empty;
+                }
+
+                PropertyInfo nameProp = scene.GetType().GetProperty("name");
+                if (nameProp == null)
+                {
+                    return string.Empty;
+                }
+
+                return nameProp.GetValue(scene, null) as string ?? string.Empty;
+            }
+            catch (Exception)
+            {
+                return string.Empty;
+            }
         }
 
         private void LogFailure()
@@ -586,6 +739,14 @@ namespace MyWinterCarMpMod.Sync
                     cam = controller.GetComponentInChildren<Camera>();
                 }
                 view = cam != null ? cam.transform : null;
+                if (body != null && !IsInActiveScene(body))
+                {
+                    body = null;
+                }
+                if (view != null && !IsInActiveScene(view))
+                {
+                    view = null;
+                }
                 return body != null || view != null;
             }
 

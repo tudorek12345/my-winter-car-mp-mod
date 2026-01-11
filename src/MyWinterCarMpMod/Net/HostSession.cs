@@ -54,6 +54,8 @@ namespace MyWinterCarMpMod.Net
         private bool _worldStateAcked;
         private float _nextWorldStateTime;
         private int _worldStateAttempts;
+        private float _nextPlayerSendLogTime;
+        private float _nextPlayerReceiveLogTime;
 
         public HostSession(ITransport transport, Settings settings, LevelSync levelSync, DoorSync doorSync, VehicleSync vehicleSync, PickupSync pickupSync, ManualLogSource log, string buildId, string modVersion)
         {
@@ -150,6 +152,8 @@ namespace MyWinterCarMpMod.Net
             _worldStateAcked = false;
             _nextWorldStateTime = 0f;
             _worldStateAttempts = 0;
+            _nextPlayerSendLogTime = 0f;
+            _nextPlayerReceiveLogTime = 0f;
             _status = _running ? "Hosting (waiting)" : "Host failed.";
             if (_running && _log != null)
             {
@@ -210,12 +214,20 @@ namespace MyWinterCarMpMod.Net
                 float now = Time.realtimeSinceStartup;
                 if (now - _lastReceiveTime > _settings.GetConnectionTimeoutSeconds())
                 {
+                    if (!_clientSceneReady)
+                    {
+                        // Give clients extra time while they load into the scene.
+                        _lastReceiveTime = now;
+                    }
+                    else
+                    {
                     if (_log != null)
                     {
                         _log.LogWarning("Client timed out.");
                     }
                     ResetConnection("Hosting (waiting)");
                     return;
+                    }
                 }
 
                 if (_clientSceneReady && _awaitWorldStateAck && now >= _nextWorldStateTime)
@@ -228,10 +240,13 @@ namespace MyWinterCarMpMod.Net
                 {
                     _nextSendTime = now + interval;
                     SendPlayerState();
-                    if (_clientSceneReady && _worldStateAcked)
+                    if (_clientSceneReady)
                     {
                         SendDoorStates(now);
                         SendDoorEvents();
+                    }
+                    if (_clientSceneReady && _worldStateAcked)
+                    {
                         SendVehicleStates(now);
                         SendPickupStates(now);
                         SendOwnershipUpdates();
@@ -328,6 +343,16 @@ namespace MyWinterCarMpMod.Net
                         _lastClientSequence = message.PlayerState.Sequence;
                         _latestClientState = message.PlayerState;
                         _hasClientState = true;
+                        EnsureWorldStateAcked("client player state");
+                        float receiveNow = Time.realtimeSinceStartup;
+                        if (_verbose && receiveNow >= _nextPlayerReceiveLogTime)
+                        {
+                            DebugLog.Verbose("Host: recv PlayerState seq=" + message.PlayerState.Sequence +
+                                " pos=" + message.PlayerState.PosX.ToString("F2") + "," +
+                                message.PlayerState.PosY.ToString("F2") + "," +
+                                message.PlayerState.PosZ.ToString("F2"));
+                            _nextPlayerReceiveLogTime = receiveNow + 1f;
+                        }
                     }
                     break;
                 case MessageType.CameraState:
@@ -348,6 +373,16 @@ namespace MyWinterCarMpMod.Net
                             ViewRotW = message.CameraState.RotW
                         };
                         _hasClientState = true;
+                        EnsureWorldStateAcked("client camera state");
+                        float receiveNowCamera = Time.realtimeSinceStartup;
+                        if (_verbose && receiveNowCamera >= _nextPlayerReceiveLogTime)
+                        {
+                            DebugLog.Verbose("Host: recv CameraState seq=" + message.CameraState.Sequence +
+                                " pos=" + message.CameraState.PosX.ToString("F2") + "," +
+                                message.CameraState.PosY.ToString("F2") + "," +
+                                message.CameraState.PosZ.ToString("F2"));
+                            _nextPlayerReceiveLogTime = receiveNowCamera + 1f;
+                        }
                     }
                     break;
                 case MessageType.Disconnect:
@@ -443,6 +478,21 @@ namespace MyWinterCarMpMod.Net
             if (_log != null)
             {
                 _log.LogInfo("World state acknowledged by client. Attempts=" + _worldStateAttempts + " Session=" + _sessionId);
+            }
+        }
+
+        private void EnsureWorldStateAcked(string reason)
+        {
+            if (!_awaitWorldStateAck || _worldStateAcked || !_connected)
+            {
+                return;
+            }
+
+            _awaitWorldStateAck = false;
+            _worldStateAcked = true;
+            if (_log != null)
+            {
+                _log.LogInfo("World state acknowledged (implicit: " + reason + "). Attempts=" + _worldStateAttempts + " Session=" + _sessionId);
             }
         }
 
@@ -583,11 +633,11 @@ namespace MyWinterCarMpMod.Net
             PlayerStateData state;
             if (!_playerLocator.TryGetLocalState(out state))
             {
-                float now = Time.realtimeSinceStartup;
-                if (now >= _nextStateLogTime)
+                float failNow = Time.realtimeSinceStartup;
+                if (failNow >= _nextStateLogTime)
                 {
                     DebugLog.Warn("Host: local player state unavailable (not sending).");
-                    _nextStateLogTime = now + 2f;
+                    _nextStateLogTime = failNow + 2f;
                 }
                 return;
             }
@@ -597,6 +647,16 @@ namespace MyWinterCarMpMod.Net
             state.Sequence = _outSequence;
             byte[] payload = Protocol.BuildPlayerState(state);
             _transport.Send(payload, false);
+
+            float sendNow = Time.realtimeSinceStartup;
+            if (_verbose && sendNow >= _nextPlayerSendLogTime)
+            {
+                DebugLog.Verbose("Host: sent PlayerState seq=" + _outSequence +
+                    " pos=" + state.PosX.ToString("F2") + "," +
+                    state.PosY.ToString("F2") + "," +
+                    state.PosZ.ToString("F2"));
+                _nextPlayerSendLogTime = sendNow + 1f;
+            }
         }
 
         private void SendDoorStates(float now)
@@ -627,6 +687,10 @@ namespace MyWinterCarMpMod.Net
             }
 
             int count = _doorSync.CollectEvents(_doorEventSendBuffer);
+            if (count > 0 && _verbose)
+            {
+                DebugLog.Verbose("Host: sending " + count + " door event(s).");
+            }
             for (int i = 0; i < count; i++)
             {
                 DoorEventData state = _doorEventSendBuffer[i];

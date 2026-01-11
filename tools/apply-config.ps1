@@ -36,4 +36,5 @@ if ($Mode -eq "Client" -and $HostSteamId -ne 0)
         Set-Content -Path $configPath -Encoding ASCII
 }
 
+
 Write-Host "Applied $Mode config to $configPath"

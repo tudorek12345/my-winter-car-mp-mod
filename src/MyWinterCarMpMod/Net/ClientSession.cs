@@ -55,6 +55,9 @@ namespace MyWinterCarMpMod.Net
         private string _pendingLevelName = string.Empty;
         private bool _sceneReadySent;
         private bool _worldStateReceived;
+        private float _nextPlayerSendLogTime;
+        private float _nextPlayerReceiveLogTime;
+        private float _nextDoorReceiveLogTime;
 
         public ClientSession(ITransport transport, Settings settings, LevelSync levelSync, DoorSync doorSync, VehicleSync vehicleSync, PickupSync pickupSync, ManualLogSource log, string buildId, string modVersion)
         {
@@ -142,6 +145,10 @@ namespace MyWinterCarMpMod.Net
             _pendingLevelName = string.Empty;
             _sceneReadySent = false;
             _worldStateReceived = false;
+            _nextDoorReceiveLogTime = 0f;
+            _nextPlayerSendLogTime = 0f;
+            _nextPlayerReceiveLogTime = 0f;
+            _nextDoorReceiveLogTime = 0f;
             _status = "Client idle";
             if (_vehicleSync != null)
             {
@@ -194,12 +201,20 @@ namespace MyWinterCarMpMod.Net
 
                 if (now - _lastReceiveTime > _settings.GetConnectionTimeoutSeconds())
                 {
+                    if (_levelSync != null && !_levelSync.IsReady)
+                    {
+                        // Loading scenes can stall updates; keep connection alive while loading.
+                        _lastReceiveTime = now;
+                    }
+                    else
+                    {
                     if (_log != null)
                     {
                         _log.LogWarning("Connection timed out.");
                     }
                     HandleConnectionLost("Timed out", true);
                     return;
+                    }
                 }
 
                 if (now >= _nextPingTime)
@@ -321,6 +336,15 @@ namespace MyWinterCarMpMod.Net
                         _lastHostSequence = message.PlayerState.Sequence;
                         _latestHostState = message.PlayerState;
                         _hasHostState = true;
+                        float receiveNow = Time.realtimeSinceStartup;
+                        if (_verbose && receiveNow >= _nextPlayerReceiveLogTime)
+                        {
+                            DebugLog.Verbose("Client: recv PlayerState seq=" + message.PlayerState.Sequence +
+                                " pos=" + message.PlayerState.PosX.ToString("F2") + "," +
+                                message.PlayerState.PosY.ToString("F2") + "," +
+                                message.PlayerState.PosZ.ToString("F2"));
+                            _nextPlayerReceiveLogTime = receiveNow + 1f;
+                        }
                     }
                     break;
                 case MessageType.CameraState:
@@ -341,6 +365,15 @@ namespace MyWinterCarMpMod.Net
                             ViewRotW = message.CameraState.RotW
                         };
                         _hasHostState = true;
+                        float receiveNowCamera = Time.realtimeSinceStartup;
+                        if (_verbose && receiveNowCamera >= _nextPlayerReceiveLogTime)
+                        {
+                            DebugLog.Verbose("Client: recv CameraState seq=" + message.CameraState.Sequence +
+                                " pos=" + message.CameraState.PosX.ToString("F2") + "," +
+                                message.CameraState.PosY.ToString("F2") + "," +
+                                message.CameraState.PosZ.ToString("F2"));
+                            _nextPlayerReceiveLogTime = receiveNowCamera + 1f;
+                        }
                     }
                     break;
                 case MessageType.LevelChange:
@@ -369,12 +402,25 @@ namespace MyWinterCarMpMod.Net
                 case MessageType.DoorState:
                     if (_doorSync != null)
                     {
+                        if (_verbose && Time.realtimeSinceStartup >= _nextDoorReceiveLogTime)
+                        {
+                            DebugLog.Verbose("Client: recv DoorState id=" + message.DoorState.DoorId +
+                                " seq=" + message.DoorState.Sequence);
+                            _nextDoorReceiveLogTime = Time.realtimeSinceStartup + 1f;
+                        }
                         _doorSync.ApplyRemote(message.DoorState);
                     }
                     break;
                 case MessageType.DoorEvent:
                     if (_doorSync != null)
                     {
+                        if (_verbose && Time.realtimeSinceStartup >= _nextDoorReceiveLogTime)
+                        {
+                            DebugLog.Verbose("Client: recv DoorEvent id=" + message.DoorEvent.DoorId +
+                                " open=" + (message.DoorEvent.Open != 0) +
+                                " seq=" + message.DoorEvent.Sequence);
+                            _nextDoorReceiveLogTime = Time.realtimeSinceStartup + 1f;
+                        }
                         _doorSync.ApplyRemoteEvent(message.DoorEvent);
                     }
                     break;
@@ -424,11 +470,11 @@ namespace MyWinterCarMpMod.Net
             PlayerStateData state;
             if (!_playerLocator.TryGetLocalState(out state))
             {
-                float now = Time.realtimeSinceStartup;
-                if (now >= _nextStateLogTime)
+                float failNow = Time.realtimeSinceStartup;
+                if (failNow >= _nextStateLogTime)
                 {
                     DebugLog.Warn("Client: local player state unavailable (not sending).");
-                    _nextStateLogTime = now + 2f;
+                    _nextStateLogTime = failNow + 2f;
                 }
                 return;
             }
@@ -444,6 +490,16 @@ namespace MyWinterCarMpMod.Net
             else
             {
                 _transport.Send(payload, false);
+            }
+
+            float sendNow = Time.realtimeSinceStartup;
+            if (_verbose && sendNow >= _nextPlayerSendLogTime)
+            {
+                DebugLog.Verbose("Client: sent PlayerState seq=" + _outSequence +
+                    " pos=" + state.PosX.ToString("F2") + "," +
+                    state.PosY.ToString("F2") + "," +
+                    state.PosZ.ToString("F2"));
+                _nextPlayerSendLogTime = sendNow + 1f;
             }
         }
 
@@ -482,6 +538,10 @@ namespace MyWinterCarMpMod.Net
             }
 
             int count = _doorSync.CollectEvents(_doorEventSendBuffer);
+            if (count > 0 && _verbose)
+            {
+                DebugLog.Verbose("Client: sending " + count + " door event(s).");
+            }
             for (int i = 0; i < count; i++)
             {
                 DoorEventData state = _doorEventSendBuffer[i];
