@@ -1,6 +1,5 @@
 # My Winter Car MP Mod (WIP)
 
-Early two-player co-op prototype for "My Winter Car" (Unity Mono). Currently syncs player presence (position + view yaw), level changes, a simple progress marker, and experimental door hinge sync. This is not full co-op yet.
 
 ## Current Status
 Host and client can connect in-game and both see the remote capsule rig. Interior room doors and the cabin front entrance sync. The cabin back door is still not syncing, and vehicle doors can jitter/jump the car when opened.

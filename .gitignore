@@ -21,3 +21,10 @@ obj/
 .tmp/
 *.log
 *.tmp
+
+# Local reference assemblies (too large for repo)
+tools/refassemblies/
+
+# Game runtime artifacts if copied into repo
+BepInEx/
+MyWinterCar_Data/
