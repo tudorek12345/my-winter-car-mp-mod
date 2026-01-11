@@ -3,9 +3,11 @@
 Early two-player co-op prototype for "My Winter Car" (Unity Mono). Currently syncs player presence (position + view yaw), level changes, a simple progress marker, and experimental door hinge sync. This is not full co-op yet.
 
 ## Current Status
-Host and client can connect and load into GAME; avatar and door sync are still being tuned.
+(Both players) Host and client can now connect in game, host sees client via very primitive capsule/rig for now.
 
-![Main menu status](https://github.com/user-attachments/assets/94f9fc03-6071-4a5f-b855-8c95d658f65c)
+OFFICIAL DISCORD
+https://discord.gg/GQeC5tCH2w
+
 
 ## Current Features
 - Two-player host/client.
