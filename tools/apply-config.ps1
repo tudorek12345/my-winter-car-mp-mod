@@ -24,6 +24,12 @@ $configPath = Join-Path $configDir $configFile
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 Copy-Item -Path $templatePath -Destination $configPath -Force
 
+# Force correct mode in the rendered config to avoid Spectator fallback.
+(Get-Content $configPath) `
+    -replace '^Mode\\s*=.*$', "Mode = $Mode" `
+    -replace '^Transport\\s*=.*$', "Transport = TcpLan" |
+    Set-Content -Path $configPath -Encoding ASCII
+
 if ($Mode -eq "Client" -and $HostSteamId -ne 0)
 {
     (Get-Content $configPath) -replace '^SpectatorHostSteamId\\s*=.*$', "SpectatorHostSteamId = $HostSteamId" |

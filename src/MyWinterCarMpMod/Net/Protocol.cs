@@ -11,12 +11,40 @@ namespace MyWinterCarMpMod.Net
         CameraState = 3,
         LevelChange = 4,
         ProgressMarker = 5,
-        Ping = 6,
-        Pong = 7,
-        Disconnect = 8,
-        PlayerState = 9,
-        HelloReject = 10,
-        DoorState = 11
+        SceneReady = 6,
+        Ping = 7,
+        Pong = 8,
+        Disconnect = 9,
+        PlayerState = 10,
+        HelloReject = 11,
+        DoorState = 12,
+        VehicleState = 13,
+        DoorEvent = 14,
+        PickupState = 15,
+        OwnershipRequest = 16,
+        OwnershipUpdate = 17,
+        WorldState = 18,
+        WorldStateAck = 19
+    }
+
+    public enum SyncObjectKind : byte
+    {
+        Door = 1,
+        Vehicle = 2,
+        Pickup = 3
+    }
+
+    public enum OwnershipAction : byte
+    {
+        Request = 1,
+        Release = 2
+    }
+
+    public enum OwnerKind : byte
+    {
+        None = 0,
+        Host = 1,
+        Client = 2
     }
 
     public struct HelloData
@@ -95,6 +123,13 @@ namespace MyWinterCarMpMod.Net
         public string Marker;
     }
 
+    public struct SceneReadyData
+    {
+        public uint SessionId;
+        public int LevelIndex;
+        public string LevelName;
+    }
+
     public struct DoorStateData
     {
         public uint SessionId;
@@ -105,6 +140,76 @@ namespace MyWinterCarMpMod.Net
         public float RotY;
         public float RotZ;
         public float RotW;
+    }
+
+    public struct DoorEventData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public uint DoorId;
+        public byte Open;
+    }
+
+    public struct VehicleStateData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public long UnixTimeMs;
+        public uint VehicleId;
+        public float PosX;
+        public float PosY;
+        public float PosZ;
+        public float RotX;
+        public float RotY;
+        public float RotZ;
+        public float RotW;
+        public float VelX;
+        public float VelY;
+        public float VelZ;
+        public float AngVelX;
+        public float AngVelY;
+        public float AngVelZ;
+    }
+
+    public struct PickupStateData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public long UnixTimeMs;
+        public uint PickupId;
+        public float PosX;
+        public float PosY;
+        public float PosZ;
+        public float RotX;
+        public float RotY;
+        public float RotZ;
+        public float RotW;
+        public byte Flags;
+    }
+
+    public struct OwnershipRequestData
+    {
+        public uint SessionId;
+        public SyncObjectKind Kind;
+        public uint ObjectId;
+        public OwnershipAction Action;
+    }
+
+    public struct OwnershipUpdateData
+    {
+        public uint SessionId;
+        public SyncObjectKind Kind;
+        public uint ObjectId;
+        public OwnerKind Owner;
+    }
+
+    public struct WorldStateData
+    {
+        public uint SessionId;
+        public DoorStateData[] Doors;
+        public VehicleStateData[] Vehicles;
+        public PickupStateData[] Pickups;
+        public OwnershipUpdateData[] Ownership;
     }
 
     public sealed class NetMessage
@@ -120,13 +225,20 @@ namespace MyWinterCarMpMod.Net
         public PongData Pong;
         public LevelChangeData LevelChange;
         public ProgressMarkerData ProgressMarker;
+        public SceneReadyData SceneReady;
         public DoorStateData DoorState;
+        public DoorEventData DoorEvent;
+        public VehicleStateData VehicleState;
+        public PickupStateData PickupState;
+        public OwnershipRequestData OwnershipRequest;
+        public OwnershipUpdateData OwnershipUpdate;
+        public WorldStateData WorldState;
     }
 
     public static class Protocol
     {
         public const uint Magic = 0x4D575331;
-        public const ushort Version = 3;
+        public const ushort Version = 6;
         private const int MaxStringBytes = 4096;
         private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
@@ -236,6 +348,19 @@ namespace MyWinterCarMpMod.Net
             }
         }
 
+        public static byte[] BuildSceneReady(uint sessionId, int levelIndex, string levelName)
+        {
+            using (MemoryStream stream = new MemoryStream(128))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.SceneReady);
+                writer.Write(sessionId);
+                writer.Write(levelIndex);
+                WriteString(writer, levelName);
+                return stream.ToArray();
+            }
+        }
+
         public static byte[] BuildPing(uint sessionId, long unixTimeMs)
         {
             using (MemoryStream stream = new MemoryStream(24))
@@ -285,6 +410,123 @@ namespace MyWinterCarMpMod.Net
                 writer.Write(state.RotY);
                 writer.Write(state.RotZ);
                 writer.Write(state.RotW);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildDoorEvent(DoorEventData state)
+        {
+            using (MemoryStream stream = new MemoryStream(32))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.DoorEvent);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
+                writer.Write(state.DoorId);
+                writer.Write(state.Open);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildVehicleState(VehicleStateData state)
+        {
+            using (MemoryStream stream = new MemoryStream(96))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.VehicleState);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
+                writer.Write(state.UnixTimeMs);
+                writer.Write(state.VehicleId);
+                writer.Write(state.PosX);
+                writer.Write(state.PosY);
+                writer.Write(state.PosZ);
+                writer.Write(state.RotX);
+                writer.Write(state.RotY);
+                writer.Write(state.RotZ);
+                writer.Write(state.RotW);
+                writer.Write(state.VelX);
+                writer.Write(state.VelY);
+                writer.Write(state.VelZ);
+                writer.Write(state.AngVelX);
+                writer.Write(state.AngVelY);
+                writer.Write(state.AngVelZ);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildPickupState(PickupStateData state)
+        {
+            using (MemoryStream stream = new MemoryStream(96))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.PickupState);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
+                writer.Write(state.UnixTimeMs);
+                writer.Write(state.PickupId);
+                writer.Write(state.PosX);
+                writer.Write(state.PosY);
+                writer.Write(state.PosZ);
+                writer.Write(state.RotX);
+                writer.Write(state.RotY);
+                writer.Write(state.RotZ);
+                writer.Write(state.RotW);
+                writer.Write(state.Flags);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildOwnershipRequest(OwnershipRequestData request)
+        {
+            using (MemoryStream stream = new MemoryStream(24))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.OwnershipRequest);
+                writer.Write(request.SessionId);
+                writer.Write((byte)request.Kind);
+                writer.Write(request.ObjectId);
+                writer.Write((byte)request.Action);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildOwnershipUpdate(OwnershipUpdateData update)
+        {
+            using (MemoryStream stream = new MemoryStream(24))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.OwnershipUpdate);
+                writer.Write(update.SessionId);
+                writer.Write((byte)update.Kind);
+                writer.Write(update.ObjectId);
+                writer.Write((byte)update.Owner);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildWorldState(WorldStateData state)
+        {
+            using (MemoryStream stream = new MemoryStream(256))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.WorldState);
+                writer.Write(state.SessionId);
+                WriteDoorStateList(writer, state.Doors);
+                WriteVehicleStateList(writer, state.Vehicles);
+                WritePickupStateList(writer, state.Pickups);
+                WriteOwnershipList(writer, state.Ownership);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildWorldStateAck(uint sessionId)
+        {
+            using (MemoryStream stream = new MemoryStream(16))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.WorldStateAck);
+                writer.Write(sessionId);
                 return stream.ToArray();
             }
         }
@@ -397,6 +639,14 @@ namespace MyWinterCarMpMod.Net
                                 Marker = ReadString(reader)
                             };
                             break;
+                        case MessageType.SceneReady:
+                            result.SceneReady = new SceneReadyData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                LevelIndex = reader.ReadInt32(),
+                                LevelName = ReadString(reader)
+                            };
+                            break;
                         case MessageType.Ping:
                             result.Ping = new PingData
                             {
@@ -429,6 +679,85 @@ namespace MyWinterCarMpMod.Net
                                 RotW = reader.ReadSingle()
                             };
                             break;
+                        case MessageType.DoorEvent:
+                            result.DoorEvent = new DoorEventData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                DoorId = reader.ReadUInt32(),
+                                Open = reader.ReadByte()
+                            };
+                            break;
+                        case MessageType.VehicleState:
+                            result.VehicleState = new VehicleStateData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64(),
+                                VehicleId = reader.ReadUInt32(),
+                                PosX = reader.ReadSingle(),
+                                PosY = reader.ReadSingle(),
+                                PosZ = reader.ReadSingle(),
+                                RotX = reader.ReadSingle(),
+                                RotY = reader.ReadSingle(),
+                                RotZ = reader.ReadSingle(),
+                                RotW = reader.ReadSingle(),
+                                VelX = reader.ReadSingle(),
+                                VelY = reader.ReadSingle(),
+                                VelZ = reader.ReadSingle(),
+                                AngVelX = reader.ReadSingle(),
+                                AngVelY = reader.ReadSingle(),
+                                AngVelZ = reader.ReadSingle()
+                            };
+                            break;
+                        case MessageType.PickupState:
+                            result.PickupState = new PickupStateData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64(),
+                                PickupId = reader.ReadUInt32(),
+                                PosX = reader.ReadSingle(),
+                                PosY = reader.ReadSingle(),
+                                PosZ = reader.ReadSingle(),
+                                RotX = reader.ReadSingle(),
+                                RotY = reader.ReadSingle(),
+                                RotZ = reader.ReadSingle(),
+                                RotW = reader.ReadSingle(),
+                                Flags = reader.ReadByte()
+                            };
+                            break;
+                        case MessageType.OwnershipRequest:
+                            result.OwnershipRequest = new OwnershipRequestData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Kind = (SyncObjectKind)reader.ReadByte(),
+                                ObjectId = reader.ReadUInt32(),
+                                Action = (OwnershipAction)reader.ReadByte()
+                            };
+                            break;
+                        case MessageType.OwnershipUpdate:
+                            result.OwnershipUpdate = new OwnershipUpdateData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Kind = (SyncObjectKind)reader.ReadByte(),
+                                ObjectId = reader.ReadUInt32(),
+                                Owner = (OwnerKind)reader.ReadByte()
+                            };
+                            break;
+                        case MessageType.WorldState:
+                            result.WorldState = new WorldStateData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Doors = ReadDoorStateList(reader),
+                                Vehicles = ReadVehicleStateList(reader),
+                                Pickups = ReadPickupStateList(reader),
+                                Ownership = ReadOwnershipList(reader)
+                            };
+                            break;
+                        case MessageType.WorldStateAck:
+                            result.SessionId = reader.ReadUInt32();
+                            break;
                         default:
                             error = "Unknown message type.";
                             return false;
@@ -451,8 +780,29 @@ namespace MyWinterCarMpMod.Net
                         case MessageType.ProgressMarker:
                             result.SessionId = result.ProgressMarker.SessionId;
                             break;
+                        case MessageType.SceneReady:
+                            result.SessionId = result.SceneReady.SessionId;
+                            break;
                         case MessageType.DoorState:
                             result.SessionId = result.DoorState.SessionId;
+                            break;
+                        case MessageType.DoorEvent:
+                            result.SessionId = result.DoorEvent.SessionId;
+                            break;
+                        case MessageType.VehicleState:
+                            result.SessionId = result.VehicleState.SessionId;
+                            break;
+                        case MessageType.PickupState:
+                            result.SessionId = result.PickupState.SessionId;
+                            break;
+                        case MessageType.OwnershipRequest:
+                            result.SessionId = result.OwnershipRequest.SessionId;
+                            break;
+                        case MessageType.OwnershipUpdate:
+                            result.SessionId = result.OwnershipUpdate.SessionId;
+                            break;
+                        case MessageType.WorldState:
+                            result.SessionId = result.WorldState.SessionId;
                             break;
                     }
 
@@ -465,6 +815,259 @@ namespace MyWinterCarMpMod.Net
                 error = ex.Message;
                 return false;
             }
+        }
+
+        private static void WriteDoorStateList(BinaryWriter writer, DoorStateData[] states)
+        {
+            if (states == null)
+            {
+                writer.Write(0);
+                return;
+            }
+            writer.Write(states.Length);
+            for (int i = 0; i < states.Length; i++)
+            {
+                WriteDoorState(writer, states[i]);
+            }
+        }
+
+        private static void WriteVehicleStateList(BinaryWriter writer, VehicleStateData[] states)
+        {
+            if (states == null)
+            {
+                writer.Write(0);
+                return;
+            }
+            writer.Write(states.Length);
+            for (int i = 0; i < states.Length; i++)
+            {
+                WriteVehicleState(writer, states[i]);
+            }
+        }
+
+        private static void WritePickupStateList(BinaryWriter writer, PickupStateData[] states)
+        {
+            if (states == null)
+            {
+                writer.Write(0);
+                return;
+            }
+            writer.Write(states.Length);
+            for (int i = 0; i < states.Length; i++)
+            {
+                WritePickupState(writer, states[i]);
+            }
+        }
+
+        private static void WriteOwnershipList(BinaryWriter writer, OwnershipUpdateData[] states)
+        {
+            if (states == null)
+            {
+                writer.Write(0);
+                return;
+            }
+            writer.Write(states.Length);
+            for (int i = 0; i < states.Length; i++)
+            {
+                WriteOwnershipUpdate(writer, states[i]);
+            }
+        }
+
+        private static DoorStateData[] ReadDoorStateList(BinaryReader reader)
+        {
+            int count = ReadCount(reader);
+            if (count == 0)
+            {
+                return new DoorStateData[0];
+            }
+            DoorStateData[] states = new DoorStateData[count];
+            for (int i = 0; i < count; i++)
+            {
+                states[i] = ReadDoorState(reader);
+            }
+            return states;
+        }
+
+        private static VehicleStateData[] ReadVehicleStateList(BinaryReader reader)
+        {
+            int count = ReadCount(reader);
+            if (count == 0)
+            {
+                return new VehicleStateData[0];
+            }
+            VehicleStateData[] states = new VehicleStateData[count];
+            for (int i = 0; i < count; i++)
+            {
+                states[i] = ReadVehicleState(reader);
+            }
+            return states;
+        }
+
+        private static PickupStateData[] ReadPickupStateList(BinaryReader reader)
+        {
+            int count = ReadCount(reader);
+            if (count == 0)
+            {
+                return new PickupStateData[0];
+            }
+            PickupStateData[] states = new PickupStateData[count];
+            for (int i = 0; i < count; i++)
+            {
+                states[i] = ReadPickupState(reader);
+            }
+            return states;
+        }
+
+        private static OwnershipUpdateData[] ReadOwnershipList(BinaryReader reader)
+        {
+            int count = ReadCount(reader);
+            if (count == 0)
+            {
+                return new OwnershipUpdateData[0];
+            }
+            OwnershipUpdateData[] states = new OwnershipUpdateData[count];
+            for (int i = 0; i < count; i++)
+            {
+                states[i] = ReadOwnershipUpdate(reader);
+            }
+            return states;
+        }
+
+        private static void WriteDoorState(BinaryWriter writer, DoorStateData state)
+        {
+            writer.Write(state.SessionId);
+            writer.Write(state.Sequence);
+            writer.Write(state.UnixTimeMs);
+            writer.Write(state.DoorId);
+            writer.Write(state.RotX);
+            writer.Write(state.RotY);
+            writer.Write(state.RotZ);
+            writer.Write(state.RotW);
+        }
+
+        private static void WriteVehicleState(BinaryWriter writer, VehicleStateData state)
+        {
+            writer.Write(state.SessionId);
+            writer.Write(state.Sequence);
+            writer.Write(state.UnixTimeMs);
+            writer.Write(state.VehicleId);
+            writer.Write(state.PosX);
+            writer.Write(state.PosY);
+            writer.Write(state.PosZ);
+            writer.Write(state.RotX);
+            writer.Write(state.RotY);
+            writer.Write(state.RotZ);
+            writer.Write(state.RotW);
+            writer.Write(state.VelX);
+            writer.Write(state.VelY);
+            writer.Write(state.VelZ);
+            writer.Write(state.AngVelX);
+            writer.Write(state.AngVelY);
+            writer.Write(state.AngVelZ);
+        }
+
+        private static void WritePickupState(BinaryWriter writer, PickupStateData state)
+        {
+            writer.Write(state.SessionId);
+            writer.Write(state.Sequence);
+            writer.Write(state.UnixTimeMs);
+            writer.Write(state.PickupId);
+            writer.Write(state.PosX);
+            writer.Write(state.PosY);
+            writer.Write(state.PosZ);
+            writer.Write(state.RotX);
+            writer.Write(state.RotY);
+            writer.Write(state.RotZ);
+            writer.Write(state.RotW);
+            writer.Write(state.Flags);
+        }
+
+        private static void WriteOwnershipUpdate(BinaryWriter writer, OwnershipUpdateData state)
+        {
+            writer.Write(state.SessionId);
+            writer.Write((byte)state.Kind);
+            writer.Write(state.ObjectId);
+            writer.Write((byte)state.Owner);
+        }
+
+        private static DoorStateData ReadDoorState(BinaryReader reader)
+        {
+            return new DoorStateData
+            {
+                SessionId = reader.ReadUInt32(),
+                Sequence = reader.ReadUInt32(),
+                UnixTimeMs = reader.ReadInt64(),
+                DoorId = reader.ReadUInt32(),
+                RotX = reader.ReadSingle(),
+                RotY = reader.ReadSingle(),
+                RotZ = reader.ReadSingle(),
+                RotW = reader.ReadSingle()
+            };
+        }
+
+        private static VehicleStateData ReadVehicleState(BinaryReader reader)
+        {
+            return new VehicleStateData
+            {
+                SessionId = reader.ReadUInt32(),
+                Sequence = reader.ReadUInt32(),
+                UnixTimeMs = reader.ReadInt64(),
+                VehicleId = reader.ReadUInt32(),
+                PosX = reader.ReadSingle(),
+                PosY = reader.ReadSingle(),
+                PosZ = reader.ReadSingle(),
+                RotX = reader.ReadSingle(),
+                RotY = reader.ReadSingle(),
+                RotZ = reader.ReadSingle(),
+                RotW = reader.ReadSingle(),
+                VelX = reader.ReadSingle(),
+                VelY = reader.ReadSingle(),
+                VelZ = reader.ReadSingle(),
+                AngVelX = reader.ReadSingle(),
+                AngVelY = reader.ReadSingle(),
+                AngVelZ = reader.ReadSingle()
+            };
+        }
+
+        private static PickupStateData ReadPickupState(BinaryReader reader)
+        {
+            return new PickupStateData
+            {
+                SessionId = reader.ReadUInt32(),
+                Sequence = reader.ReadUInt32(),
+                UnixTimeMs = reader.ReadInt64(),
+                PickupId = reader.ReadUInt32(),
+                PosX = reader.ReadSingle(),
+                PosY = reader.ReadSingle(),
+                PosZ = reader.ReadSingle(),
+                RotX = reader.ReadSingle(),
+                RotY = reader.ReadSingle(),
+                RotZ = reader.ReadSingle(),
+                RotW = reader.ReadSingle(),
+                Flags = reader.ReadByte()
+            };
+        }
+
+        private static OwnershipUpdateData ReadOwnershipUpdate(BinaryReader reader)
+        {
+            return new OwnershipUpdateData
+            {
+                SessionId = reader.ReadUInt32(),
+                Kind = (SyncObjectKind)reader.ReadByte(),
+                ObjectId = reader.ReadUInt32(),
+                Owner = (OwnerKind)reader.ReadByte()
+            };
+        }
+
+        private static int ReadCount(BinaryReader reader)
+        {
+            const int maxCount = 4096;
+            int count = reader.ReadInt32();
+            if (count < 0 || count > maxCount)
+            {
+                throw new IOException("Invalid list count.");
+            }
+            return count;
         }
 
         private static byte[] BuildNoPayload(MessageType type)

@@ -45,12 +45,21 @@ namespace MyWinterCarMpMod.Sync
         private float _nextResolveLogTime;
         private int _cachedLevelIndex = int.MinValue;
         private string _cachedLevelName = string.Empty;
+        private bool _readyThisScene;
+        private bool _loggedReady;
+
+        public bool IsReady
+        {
+            get { return _readyThisScene; }
+        }
 
         public void Clear()
         {
             _cachedCamera = null;
             _cachedBody = null;
             _cachedView = null;
+            _readyThisScene = false;
+            _loggedReady = false;
         }
 
         public bool TryGetLocalState(out PlayerStateData state)
@@ -78,6 +87,13 @@ namespace MyWinterCarMpMod.Sync
                 return false;
             }
 
+            _readyThisScene = true;
+            if (!_loggedReady)
+            {
+                DebugLog.Info("PlayerLocator: ready in scene " + (_cachedLevelName ?? Application.loadedLevelName ?? "<unknown>"));
+                _loggedReady = true;
+            }
+
             Vector3 pos = body.position;
             Quaternion viewRot = view.rotation;
             state.UnixTimeMs = GetUnixTimeMs();
@@ -97,6 +113,10 @@ namespace MyWinterCarMpMod.Sync
             view = null;
 
             CheckForLevelChange();
+            if (IsMainMenuSceneName(Application.loadedLevelName))
+            {
+                return false;
+            }
 
             if (IsViewValid(_cachedView) && IsBodyValid(_cachedBody))
             {
@@ -414,14 +434,9 @@ namespace MyWinterCarMpMod.Sync
                 return false;
             }
 
-            string level = Application.loadedLevelName;
-            if (!string.IsNullOrEmpty(level))
+            if (IsMainMenuSceneName(Application.loadedLevelName))
             {
-                string normalized = level.Replace(" ", string.Empty);
-                if (string.Equals(normalized, "MainMenu", StringComparison.OrdinalIgnoreCase))
-                {
-                    return false;
-                }
+                return true;
             }
 
             Transform current = cam.transform;
@@ -437,6 +452,16 @@ namespace MyWinterCarMpMod.Sync
             }
 
             return false;
+        }
+
+        private static bool IsMainMenuSceneName(string levelName)
+        {
+            if (string.IsNullOrEmpty(levelName))
+            {
+                return false;
+            }
+            string normalized = levelName.Replace(" ", string.Empty);
+            return string.Equals(normalized, "MainMenu", StringComparison.OrdinalIgnoreCase);
         }
 
         private void LogFailure()
@@ -481,6 +506,17 @@ namespace MyWinterCarMpMod.Sync
             _cachedCamera = view != null ? view.GetComponent<Camera>() : null;
             _cachedBody = body;
             _cachedView = view;
+        }
+
+        public bool Warmup(string context)
+        {
+            PlayerStateData state;
+            bool ok = TryGetLocalState(out state);
+            if (ok)
+            {
+                DebugLog.Verbose("PlayerLocator: warmup success (" + context + ") body=" + BuildPath(_cachedBody) + " view=" + BuildPath(_cachedView));
+            }
+            return ok;
         }
 
         private void CheckForLevelChange()

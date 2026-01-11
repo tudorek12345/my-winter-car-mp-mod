@@ -26,6 +26,8 @@ namespace MyWinterCarMpMod
         private ClientSession _clientSession;
         private RemotePlayerAvatar _remoteAvatar;
         private DoorSync _doorSync;
+        private VehicleSync _vehicleSync;
+        private PickupSync _pickupSync;
         private ITransport _transport;
         private LanDiscovery _lanDiscovery;
         private Vector2 _lanScroll;
@@ -50,12 +52,14 @@ namespace MyWinterCarMpMod
         private string _configSuffix;
         private int _lastLevelIndex = int.MinValue;
         private string _lastLevelName = string.Empty;
+        private const Mode DefaultClientMode = Mode.Client;
 
         private void Awake()
         {
             _settings = new Settings();
             ConfigFile config = ResolveConfigFile();
             _settings.Bind(config, Logger);
+            CoerceModeIfNeeded(config);
             AllowMultipleInstances = _settings.AllowMultipleInstances.Value;
             ApplyHarmonyPatches();
 
@@ -66,6 +70,8 @@ namespace MyWinterCarMpMod
             _overlay = new Overlay();
             _remoteAvatar = new RemotePlayerAvatar();
             _doorSync = new DoorSync(_settings);
+            _vehicleSync = new VehicleSync(_settings);
+            _pickupSync = new PickupSync(_settings);
             _overlayVisible = _settings.OverlayEnabled.Value;
             _buildId = Application.version + "|" + Application.unityVersion;
             _modVersion = Info.Metadata.Version.ToString();
@@ -107,6 +113,19 @@ namespace MyWinterCarMpMod
                 bool allowScan = !IsMainMenuScene();
                 _doorSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
                 _doorSync.Update(Time.realtimeSinceStartup);
+            }
+
+            if (_vehicleSync != null && _levelSync != null)
+            {
+                bool allowScan = !IsMainMenuScene();
+                _vehicleSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
+            }
+
+            if (_pickupSync != null && _levelSync != null)
+            {
+                bool allowScan = !IsMainMenuScene();
+                _pickupSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
+                _pickupSync.Update(Time.realtimeSinceStartup);
             }
 
             if (_settings.Mode.Value == Mode.Host && _hostSession != null)
@@ -155,6 +174,14 @@ namespace MyWinterCarMpMod
             if (_doorSync != null)
             {
                 _doorSync.Clear();
+            }
+            if (_vehicleSync != null)
+            {
+                _vehicleSync.Clear();
+            }
+            if (_pickupSync != null)
+            {
+                _pickupSync.Clear();
             }
             if (_lanDiscovery != null)
             {
@@ -216,7 +243,7 @@ namespace MyWinterCarMpMod
             }
             ResetTransport();
             _transport = CreateTransport();
-            _hostSession = new HostSession(_transport, _settings, _levelSync, _doorSync, Logger, _buildId, _modVersion);
+            _hostSession = new HostSession(_transport, _settings, _levelSync, _doorSync, _vehicleSync, _pickupSync, Logger, _buildId, _modVersion);
             _hostSession.Start();
             DebugLog.Info("Host started. Transport=" + _transport.Kind);
             if (_remoteAvatar != null)
@@ -245,7 +272,7 @@ namespace MyWinterCarMpMod
             }
             ResetTransport();
             _transport = CreateTransport();
-            _clientSession = new ClientSession(_transport, _settings, _levelSync, _doorSync, Logger, _buildId, _modVersion);
+            _clientSession = new ClientSession(_transport, _settings, _levelSync, _doorSync, _vehicleSync, _pickupSync, Logger, _buildId, _modVersion);
             _clientSession.Connect();
             DebugLog.Info("Client connect requested. Transport=" + _transport.Kind);
             if (_remoteAvatar != null)
@@ -951,6 +978,23 @@ namespace MyWinterCarMpMod
                 Logger.LogInfo("Using config override: " + path);
             }
             return new ConfigFile(path, true);
+        }
+
+        private void CoerceModeIfNeeded(ConfigFile config)
+        {
+            // Many launches came up as Spectator due to stale configs; force non-spectator for co-op.
+            if (_settings.Mode != null && _settings.Mode.Value == Mode.Spectator)
+            {
+                _settings.Mode.Value = DefaultClientMode;
+                if (config != null)
+                {
+                    config.Save();
+                }
+                if (Logger != null)
+                {
+                    Logger.LogWarning("Mode was Spectator; coerced to Client for co-op.");
+                }
+            }
         }
 
         private static string ResolveConfigSuffix()

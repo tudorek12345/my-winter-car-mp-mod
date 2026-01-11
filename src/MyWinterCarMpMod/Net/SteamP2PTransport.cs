@@ -8,6 +8,7 @@ namespace MyWinterCarMpMod.Net
 {
     public sealed class SteamP2PTransport : ITransport
     {
+        private const int MaxPayloadBytes = 262144;
         private readonly ManualLogSource _log;
         private readonly bool _verbose;
         private readonly byte _channel;
@@ -143,6 +144,14 @@ namespace MyWinterCarMpMod.Net
         {
             if (!IsAvailable || payload == null || payload.Length == 0)
             {
+                return false;
+            }
+            if (payload.Length > MaxPayloadBytes)
+            {
+                if (_log != null)
+                {
+                    _log.LogWarning("Steam send payload too large: " + payload.Length + " bytes.");
+                }
                 return false;
             }
 

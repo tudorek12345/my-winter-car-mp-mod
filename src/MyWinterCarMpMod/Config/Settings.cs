@@ -41,9 +41,23 @@ namespace MyWinterCarMpMod.Config
         public ConfigEntry<bool> SpectatorLockdown;
 
         public ConfigEntry<bool> DoorSyncEnabled;
+        public ConfigEntry<bool> DoorPlayMakerEnabled;
         public ConfigEntry<int> DoorSendHz;
         public ConfigEntry<float> DoorAngleThreshold;
         public ConfigEntry<string> DoorNameFilter;
+        public ConfigEntry<bool> VehicleSyncEnabled;
+        public ConfigEntry<bool> VehicleSyncClientSend;
+        public ConfigEntry<bool> VehicleOwnershipEnabled;
+        public ConfigEntry<float> VehicleSeatDistance;
+        public ConfigEntry<int> VehicleSendHz;
+        public ConfigEntry<float> VehiclePositionThreshold;
+        public ConfigEntry<float> VehicleRotationThreshold;
+        public ConfigEntry<bool> PickupSyncEnabled;
+        public ConfigEntry<bool> PickupSyncClientSend;
+        public ConfigEntry<int> PickupSendHz;
+        public ConfigEntry<float> PickupPositionThreshold;
+        public ConfigEntry<float> PickupRotationThreshold;
+        public ConfigEntry<string> PickupNameFilter;
 
         public ConfigEntry<float> ConnectionTimeoutSeconds;
         public ConfigEntry<float> HelloRetrySeconds;
@@ -82,9 +96,24 @@ namespace MyWinterCarMpMod.Config
             SpectatorLockdown = config.Bind("Spectator", "SpectatorLockdown", true, "Spectator-only input lockdown (unused in co-op).");
 
             DoorSyncEnabled = config.Bind("DoorSync", "Enabled", true, "Sync door hinge states between host/client.");
+            DoorPlayMakerEnabled = config.Bind("DoorSync", "PlayMakerEvents", true, "Use PlayMaker door open/close events when available.");
             DoorSendHz = config.Bind("DoorSync", "SendHz", 10, "Door state send rate in Hz (1-30).");
             DoorAngleThreshold = config.Bind("DoorSync", "AngleThreshold", 1.0f, "Minimum angle change (degrees) before sending.");
             DoorNameFilter = config.Bind("DoorSync", "NameFilter", "door,ovi", "Case-insensitive name filter for door objects (empty = all hinges). Comma-separated tokens.");
+
+            VehicleSyncEnabled = config.Bind("VehicleSync", "Enabled", false, "Sync vehicle rigidbody states (experimental).");
+            VehicleSyncClientSend = config.Bind("VehicleSync", "ClientSend", false, "Allow clients to send vehicle states (experimental).");
+            VehicleOwnershipEnabled = config.Bind("VehicleSync", "OwnershipEnabled", true, "Allow client to request vehicle control.");
+            VehicleSeatDistance = config.Bind("VehicleSync", "SeatDistance", 1.2f, "Distance (meters) to detect driver seat.");
+            VehicleSendHz = config.Bind("VehicleSync", "SendHz", 10, "Vehicle state send rate in Hz (1-30).");
+            VehiclePositionThreshold = config.Bind("VehicleSync", "PositionThreshold", 0.05f, "Minimum position delta before sending (meters).");
+            VehicleRotationThreshold = config.Bind("VehicleSync", "RotationThreshold", 1.0f, "Minimum rotation delta before sending (degrees).");
+            PickupSyncEnabled = config.Bind("PickupSync", "Enabled", false, "Sync pickupable rigidbody states (experimental).");
+            PickupSyncClientSend = config.Bind("PickupSync", "ClientSend", false, "Allow clients to send pickup states (experimental).");
+            PickupSendHz = config.Bind("PickupSync", "SendHz", 12, "Pickup state send rate in Hz (1-30).");
+            PickupPositionThreshold = config.Bind("PickupSync", "PositionThreshold", 0.02f, "Minimum position delta before sending (meters).");
+            PickupRotationThreshold = config.Bind("PickupSync", "RotationThreshold", 2.0f, "Minimum rotation delta before sending (degrees).");
+            PickupNameFilter = config.Bind("PickupSync", "NameFilter", "", "Optional name filter for pickup objects (comma-separated).");
 
             ConnectionTimeoutSeconds = config.Bind("Networking", "ConnectionTimeoutSeconds", 10f, "Seconds without packets before timing out.");
             HelloRetrySeconds = config.Bind("Networking", "HelloRetrySeconds", 2f, "Seconds between hello retries while connecting.");
@@ -200,6 +229,64 @@ namespace MyWinterCarMpMod.Config
         public string GetDoorNameFilter()
         {
             return DoorNameFilter.Value ?? string.Empty;
+        }
+
+        public float GetVehicleSeatDistance()
+        {
+            return ClampMin(VehicleSeatDistance.Value, 0.2f);
+        }
+
+        public int GetVehicleSendHz()
+        {
+            int hz = VehicleSendHz.Value;
+            if (hz < 1)
+            {
+                hz = 1;
+            }
+            if (hz > 30)
+            {
+                hz = 30;
+            }
+            return hz;
+        }
+
+        public float GetVehiclePositionThreshold()
+        {
+            return ClampMin(VehiclePositionThreshold.Value, 0.01f);
+        }
+
+        public float GetVehicleRotationThreshold()
+        {
+            return ClampMin(VehicleRotationThreshold.Value, 0.1f);
+        }
+
+        public int GetPickupSendHz()
+        {
+            int hz = PickupSendHz.Value;
+            if (hz < 1)
+            {
+                hz = 1;
+            }
+            if (hz > 30)
+            {
+                hz = 30;
+            }
+            return hz;
+        }
+
+        public float GetPickupPositionThreshold()
+        {
+            return ClampMin(PickupPositionThreshold.Value, 0.01f);
+        }
+
+        public float GetPickupRotationThreshold()
+        {
+            return ClampMin(PickupRotationThreshold.Value, 0.1f);
+        }
+
+        public string GetPickupNameFilter()
+        {
+            return PickupNameFilter.Value ?? string.Empty;
         }
 
         public float GetLanBroadcastIntervalSeconds()

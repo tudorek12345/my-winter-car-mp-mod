@@ -59,6 +59,14 @@
       <HintPath>$(ManagedDir)\Assembly-CSharp-firstpass.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PlayMaker">
+      <HintPath>$(ManagedDir)\PlayMaker.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -75,8 +83,12 @@
     <Compile Include="Sync\CameraFollower.cs" />
     <Compile Include="Sync\DoorSync.cs" />
     <Compile Include="Sync\LevelSync.cs" />
+    <Compile Include="Sync\ObjectRegistry.cs" />
+    <Compile Include="Sync\PickupSync.cs" />
+    <Compile Include="Sync\PlayMakerBridge.cs" />
     <Compile Include="Sync\PlayerLocator.cs" />
     <Compile Include="Sync\RemotePlayerAvatar.cs" />
+    <Compile Include="Sync\VehicleSync.cs" />
     <Compile Include="UI\Overlay.cs" />
     <Compile Include="Util\MainThreadDispatcher.cs" />
     <Compile Include="Util\DebugLog.cs" />

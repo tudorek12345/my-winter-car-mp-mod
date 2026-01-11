@@ -11,6 +11,7 @@ namespace MyWinterCarMpMod.Net
 {
     public sealed class TcpTransport : ITransport
     {
+        private const int MaxPayloadBytes = 262144;
         private readonly ManualLogSource _log;
         private readonly bool _verbose;
         private readonly string _bindIp;
@@ -49,7 +50,7 @@ namespace MyWinterCarMpMod.Net
 
         public bool IsConnected
         {
-            get { return _client != null && _client.Connected; }
+            get { return IsClientConnected(); }
         }
 
         public string Status
@@ -108,6 +109,7 @@ namespace MyWinterCarMpMod.Net
             try
             {
                 _client = new TcpClient();
+                _client.NoDelay = true;
                 _client.Connect(_hostIp, _port);
                 _stream = _client.GetStream();
                 _running = true;
@@ -185,6 +187,16 @@ namespace MyWinterCarMpMod.Net
             {
                 return false;
             }
+            if (payload.Length > MaxPayloadBytes)
+            {
+                _status = "TCP send payload too large: " + payload.Length + " bytes.";
+                if (_log != null)
+                {
+                    _log.LogWarning(_status);
+                }
+                DebugLog.Warn(_status);
+                return false;
+            }
 
             try
             {
@@ -243,6 +255,7 @@ namespace MyWinterCarMpMod.Net
                     }
 
                     _client = client;
+                    _client.NoDelay = true;
                     _stream = _client.GetStream();
                     _status = "TCP client connected.";
                     DebugLog.Info("TCP client connected.");
@@ -269,11 +282,21 @@ namespace MyWinterCarMpMod.Net
         {
             try
             {
-                while (_running && _client != null && _client.Connected)
+                while (_running && IsClientConnected())
                 {
                     int length = ReadInt32(_stream);
                     if (length <= 0)
                     {
+                        break;
+                    }
+                    if (length > MaxPayloadBytes)
+                    {
+                        _status = "TCP payload too large: " + length + " bytes.";
+                        if (_log != null)
+                        {
+                            _log.LogWarning(_status);
+                        }
+                        DebugLog.Warn(_status);
                         break;
                     }
                     byte[] payload = ReadExact(_stream, length);
@@ -297,11 +320,14 @@ namespace MyWinterCarMpMod.Net
             }
             catch (Exception ex)
             {
+                string msg = "TCP read loop error: " + ex.Message;
                 if (_log != null)
                 {
-                    _log.LogWarning("TCP read loop error: " + ex.Message);
+                    _log.LogWarning(msg);
+                    _log.LogDebug(ex.ToString());
                 }
-                DebugLog.Warn("TCP read loop error: " + ex.Message);
+                DebugLog.Warn(msg);
+                DebugLog.Verbose(ex.ToString());
             }
             finally
             {
@@ -338,6 +364,28 @@ namespace MyWinterCarMpMod.Net
             _stream = null;
         }
 
+        private bool IsClientConnected()
+        {
+            if (_client == null)
+            {
+                return false;
+            }
+            try
+            {
+                Socket socket = _client.Client;
+                if (socket == null)
+                {
+                    return false;
+                }
+                bool disconnected = socket.Poll(0, SelectMode.SelectRead) && socket.Available == 0;
+                return !disconnected && _client.Connected;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
         private static int ReadInt32(NetworkStream stream)
         {
             byte[] buffer = ReadExact(stream, 4);
@@ -350,6 +398,10 @@ namespace MyWinterCarMpMod.Net
 
         private static byte[] ReadExact(NetworkStream stream, int length)
         {
+            if (length <= 0)
+            {
+                return null;
+            }
             byte[] buffer = new byte[length];
             int offset = 0;
             while (offset < length)

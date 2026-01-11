@@ -1,5 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using BepInEx;
+using HutongGames.PlayMaker;
 using MyWinterCarMpMod.Config;
 using MyWinterCarMpMod.Net;
 using MyWinterCarMpMod.Util;
@@ -16,12 +21,14 @@ namespace MyWinterCarMpMod.Sync
         private readonly Settings _settings;
         private readonly List<DoorEntry> _doors = new List<DoorEntry>();
         private readonly Dictionary<uint, DoorEntry> _doorLookup = new Dictionary<uint, DoorEntry>();
+        private readonly List<DoorEventData> _doorEventQueue = new List<DoorEventData>(16);
         private int _lastSceneIndex = int.MinValue;
         private string _lastSceneName = string.Empty;
         private float _nextSampleTime;
         private float _nextSummaryTime;
         private float _nextApplyLogTime;
         private bool _loggedNoDoors;
+        private bool _dumpedDoors;
 
         public DoorSync(Settings settings)
         {
@@ -123,6 +130,22 @@ namespace MyWinterCarMpMod.Sync
             return buffer.Count;
         }
 
+        public int CollectEvents(List<DoorEventData> buffer)
+        {
+            buffer.Clear();
+            if (!Enabled || _doorEventQueue.Count == 0)
+            {
+                return 0;
+            }
+
+            for (int i = 0; i < _doorEventQueue.Count; i++)
+            {
+                buffer.Add(_doorEventQueue[i]);
+            }
+            _doorEventQueue.Clear();
+            return buffer.Count;
+        }
+
         public void Update(float now)
         {
             if (!Enabled || _doors.Count == 0)
@@ -142,6 +165,16 @@ namespace MyWinterCarMpMod.Sync
                 {
                     ApplyRotation(entry, entry.LastAppliedRotation);
                 }
+
+                if (entry.DoorOpenBool != null && now >= entry.SuppressPlayMakerUntilTime)
+                {
+                    bool open = entry.DoorOpenBool.Value;
+                    if (open != entry.LastDoorOpen)
+                    {
+                        entry.LastDoorOpen = open;
+                        EnqueueDoorEvent(entry, open);
+                    }
+                }
             }
         }
 
@@ -159,6 +192,7 @@ namespace MyWinterCarMpMod.Sync
                 {
                     DebugLog.Warn("DoorSync missing door id " + state.DoorId + ". Re-scan on next scene change.");
                     _loggedNoDoors = true;
+                    DumpDoorsOnce("missing door id " + state.DoorId);
                 }
                 return;
             }
@@ -169,7 +203,7 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
-            if (state.UnixTimeMs <= entry.LastRemoteTimeMs)
+            if (!IsNewerSequence(state.Sequence, entry.LastRemoteSequence))
             {
                 return;
             }
@@ -178,10 +212,12 @@ namespace MyWinterCarMpMod.Sync
             float angleThreshold = _settings.GetDoorAngleThreshold();
             if (Quaternion.Angle(entry.LastAppliedRotation, target) < angleThreshold)
             {
+                entry.LastRemoteSequence = state.Sequence;
                 entry.LastRemoteTimeMs = state.UnixTimeMs;
                 return;
             }
 
+            entry.LastRemoteSequence = state.Sequence;
             entry.LastRemoteTimeMs = state.UnixTimeMs;
             entry.LastAppliedRotation = target;
             entry.LastSentRotation = target;
@@ -197,11 +233,80 @@ namespace MyWinterCarMpMod.Sync
             }
         }
 
+        public void ApplyRemoteEvent(DoorEventData state)
+        {
+            if (!Enabled)
+            {
+                return;
+            }
+
+            DoorEntry entry;
+            if (!_doorLookup.TryGetValue(state.DoorId, out entry))
+            {
+                return;
+            }
+
+            if (state.Sequence != 0 && !IsNewerSequence(state.Sequence, entry.LastRemoteEventSequence))
+            {
+                return;
+            }
+            if (state.Sequence == 0 && entry.LastRemoteEventSequence != 0)
+            {
+                return;
+            }
+
+            entry.LastRemoteEventSequence = state.Sequence;
+            if (entry.Fsm == null || !entry.HasPlayMaker)
+            {
+                return;
+            }
+
+            float now = Time.realtimeSinceStartup;
+            entry.SuppressPlayMakerUntilTime = now + RemoteSuppressSeconds;
+            entry.LastDoorOpen = state.Open != 0;
+
+            string eventName = state.Open != 0 ? entry.MpOpenEventName : entry.MpCloseEventName;
+            if (!string.IsNullOrEmpty(eventName))
+            {
+                entry.Fsm.SendEvent(eventName);
+            }
+        }
+
+        public DoorStateData[] BuildSnapshot(long unixTimeMs, uint sessionId)
+        {
+            if (!Enabled || _doors.Count == 0)
+            {
+                return new DoorStateData[0];
+            }
+
+            DoorStateData[] states = new DoorStateData[_doors.Count];
+            for (int i = 0; i < _doors.Count; i++)
+            {
+                DoorEntry entry = _doors[i];
+                Quaternion rot = entry.Transform != null ? entry.Transform.localRotation : Quaternion.identity;
+                states[i] = new DoorStateData
+                {
+                    SessionId = sessionId,
+                    Sequence = 1,
+                    UnixTimeMs = unixTimeMs,
+                    DoorId = entry.Id,
+                    RotX = rot.x,
+                    RotY = rot.y,
+                    RotZ = rot.z,
+                    RotW = rot.w
+                };
+            }
+
+            return states;
+        }
+
         public void Clear()
         {
             _doors.Clear();
             _doorLookup.Clear();
+            _doorEventQueue.Clear();
             _loggedNoDoors = false;
+            _dumpedDoors = false;
             _nextSummaryTime = 0f;
             _nextApplyLogTime = 0f;
         }
@@ -211,7 +316,8 @@ namespace MyWinterCarMpMod.Sync
             Clear();
 
             HingeJoint[] hinges = UnityEngine.Object.FindObjectsOfType<HingeJoint>();
-            if (hinges == null || hinges.Length == 0)
+            int totalHinges = hinges != null ? hinges.Length : 0;
+            if (totalHinges == 0)
             {
                 DebugLog.Verbose("DoorSync: no hinge joints found.");
                 return;
@@ -219,51 +325,69 @@ namespace MyWinterCarMpMod.Sync
 
             string filter = _settings.GetDoorNameFilter();
             bool hasFilter = !string.IsNullOrEmpty(filter);
-            for (int i = 0; i < hinges.Length; i++)
+            List<DoorCandidate> candidates = new List<DoorCandidate>(totalHinges * 2);
+
+            int filteredCount = CollectCandidates(hinges, filter, hasFilter, candidates);
+            if (hasFilter && filteredCount == 0)
             {
-                HingeJoint hinge = hinges[i];
-                if (hinge == null || hinge.transform == null)
-                {
-                    continue;
-                }
-
-                if (hasFilter && !NameMatches(hinge.transform, filter))
-                {
-                    continue;
-                }
-
-                AddDoor(hinge);
+                DebugLog.Warn("DoorSync: no doors matched filter '" + filter + "'. Relaxing filter to all hinges.");
             }
 
-            if (_doors.Count == 0 && hasFilter)
+            // Always collect all hinges to avoid missing doors while debugging filter coverage.
+            int unfilteredAdded = CollectCandidates(hinges, string.Empty, false, candidates);
+            if (_settings != null && _settings.VerboseLogging.Value)
             {
-                DebugLog.Warn("DoorSync: no doors matched filter '" + filter + "'. Falling back to all hinges.");
-                for (int i = 0; i < hinges.Length; i++)
-                {
-                    HingeJoint hinge = hinges[i];
-                    if (hinge == null || hinge.transform == null)
-                    {
-                        continue;
-                    }
-                    AddDoor(hinge);
-                }
+                DebugLog.Verbose("DoorSync: hinges total=" + totalHinges + " filteredMatch=" + filteredCount + " addedUnfiltered=" + unfilteredAdded + " candidates=" + candidates.Count);
             }
 
-            DebugLog.Info("DoorSync: tracking " + _doors.Count + " door(s) in " + _lastSceneName + ".");
+            candidates.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
+            Dictionary<string, int> keyCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            int playMakerAttached = 0;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                DoorCandidate candidate = candidates[i];
+                int count;
+                if (!keyCounts.TryGetValue(candidate.Key, out count))
+                {
+                    count = 0;
+                }
+                count++;
+                keyCounts[candidate.Key] = count;
+                string uniqueKey = count == 1 ? candidate.Key : candidate.Key + "|dup" + count;
+                AddDoor(candidate.Hinge, uniqueKey, candidate.DebugPath, ref playMakerAttached);
+            }
+
+            DebugLog.Info("DoorSync: tracking " + _doors.Count + " door(s) in " + _lastSceneName + ". PlayMaker hooked=" + playMakerAttached + ".");
         }
 
-        private void AddDoor(HingeJoint hinge)
+        private bool AddDoor(HingeJoint hinge, string key, string debugPath, ref int playMakerAttached)
         {
             if (hinge == null || hinge.transform == null)
             {
-                return;
+                return false;
             }
 
-            string path = BuildPath(hinge.transform);
-            uint id = HashPath(path);
+            if (string.IsNullOrEmpty(key))
+            {
+                return false;
+            }
+
+            uint id = HashPath(key);
             if (_doorLookup.ContainsKey(id))
             {
-                return;
+                string originalKey = key;
+                int suffix = 1;
+                while (_doorLookup.ContainsKey(id) && suffix < 10)
+                {
+                    key = originalKey + "|h" + suffix;
+                    id = HashPath(key);
+                    suffix++;
+                }
+                if (_doorLookup.ContainsKey(id))
+                {
+                    DebugLog.Warn("DoorSync: duplicate door id for key " + originalKey + " (skipping).");
+                    return false;
+                }
             }
 
             Transform doorTransform = hinge.transform;
@@ -276,13 +400,14 @@ namespace MyWinterCarMpMod.Sync
 
             if (doorTransform == null)
             {
-                return;
+                return false;
             }
 
             DoorEntry entry = new DoorEntry
             {
                 Id = id,
-                Path = path,
+                Key = key,
+                DebugPath = debugPath,
                 Transform = doorTransform,
                 Rigidbody = doorBody,
                 Hinge = hinge,
@@ -291,12 +416,21 @@ namespace MyWinterCarMpMod.Sync
                 LastAppliedRotation = doorTransform.localRotation
             };
 
+            bool playMaker = AttachPlayMaker(doorTransform, entry);
+            entry.HasPlayMaker = playMaker;
+
             _doors.Add(entry);
             _doorLookup.Add(id, entry);
 
+            if (playMaker)
+            {
+                playMakerAttached++;
+            }
+
             string hingeName = hinge.transform != null ? hinge.transform.name : "<null>";
             string doorName = doorTransform != null ? doorTransform.name : "<null>";
-            DebugLog.Verbose("DoorSync: add door id=" + id + " hinge=" + hingeName + " door=" + doorName + " path=" + path);
+            DebugLog.Verbose("DoorSync: add door id=" + id + " hinge=" + hingeName + " door=" + doorName + " key=" + key + " path=" + debugPath + " playmaker=" + entry.HasPlayMaker);
+            return true;
         }
 
         private static void ApplyRotation(DoorEntry entry, Quaternion localRotation)
@@ -347,6 +481,34 @@ namespace MyWinterCarMpMod.Sync
             return false;
         }
 
+        private static int CollectCandidates(HingeJoint[] hinges, string filter, bool useFilter, List<DoorCandidate> candidates)
+        {
+            if (hinges == null)
+            {
+                return 0;
+            }
+
+            int before = candidates.Count;
+            for (int i = 0; i < hinges.Length; i++)
+            {
+                HingeJoint hinge = hinges[i];
+                if (hinge == null || hinge.transform == null)
+                {
+                    continue;
+                }
+
+                if (useFilter && !NameMatches(hinge.transform, filter))
+                {
+                    continue;
+                }
+
+                string key = BuildDoorKey(hinge);
+                string debugPath = BuildDebugPath(hinge.transform);
+                candidates.Add(new DoorCandidate { Hinge = hinge, Key = key, DebugPath = debugPath });
+            }
+            return candidates.Count - before;
+        }
+
         private static bool NameContains(string name, string filter)
         {
             if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(filter))
@@ -379,7 +541,159 @@ namespace MyWinterCarMpMod.Sync
             return tokens;
         }
 
-        private static string BuildPath(Transform transform)
+        private bool AttachPlayMaker(Transform doorTransform, DoorEntry entry)
+        {
+            if (entry == null || doorTransform == null || _settings == null || !_settings.DoorPlayMakerEnabled.Value)
+            {
+                return false;
+            }
+
+            PlayMakerFSM fsm = PlayMakerBridge.FindFsmByName(doorTransform.gameObject, "Use");
+            if (fsm == null)
+            {
+                fsm = PlayMakerBridge.FindFsmWithStates(doorTransform.gameObject, new[] { "Open door", "Close door" });
+            }
+            if (fsm == null || fsm.Fsm == null)
+            {
+                DebugLog.Verbose("DoorSync: PlayMaker FSM not found for door " + doorTransform.name);
+                return false;
+            }
+
+            FsmState openState = fsm.Fsm.GetState("Open door") ?? PlayMakerBridge.FindStateByNameContains(fsm, new[] { "Open" });
+            FsmState closeState = fsm.Fsm.GetState("Close door") ?? PlayMakerBridge.FindStateByNameContains(fsm, new[] { "Close" });
+            if (openState == null || closeState == null)
+            {
+                DebugLog.Verbose("DoorSync: PlayMaker states missing for door " + doorTransform.name);
+                return false;
+            }
+
+            string mpOpenEvent = "MWC_MP_OPEN";
+            string mpCloseEvent = "MWC_MP_CLOSE";
+
+            if (!fsm.Fsm.HasEvent(mpOpenEvent))
+            {
+                FsmEvent mpOpen = PlayMakerBridge.GetOrCreateEvent(fsm, mpOpenEvent);
+                FsmEvent mpClose = PlayMakerBridge.GetOrCreateEvent(fsm, mpCloseEvent);
+                if (mpOpen != null && mpClose != null)
+                {
+                    PlayMakerBridge.AddGlobalTransition(fsm, mpOpen, openState.Name);
+                    PlayMakerBridge.AddGlobalTransition(fsm, mpClose, closeState.Name);
+
+                    string openEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorOpenEventName(), new[] { "open" });
+                    string closeEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorCloseEventName(), new[] { "close" });
+                    PlayMakerBridge.PrependAction(openState, new DoorPlayMakerAction(this, entry.Id, true, openEventName));
+                    PlayMakerBridge.PrependAction(closeState, new DoorPlayMakerAction(this, entry.Id, false, closeEventName));
+                }
+            }
+
+            entry.Fsm = fsm;
+            entry.HasPlayMaker = true;
+            entry.MpOpenEventName = mpOpenEvent;
+            entry.MpCloseEventName = mpCloseEvent;
+            entry.OpenEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorOpenEventName(), new[] { "open" });
+            entry.CloseEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorCloseEventName(), new[] { "close" });
+            entry.DoorOpenBool = PlayMakerBridge.FindBool(fsm, "DoorOpen") ?? PlayMakerBridge.FindBoolByTokens(fsm, new[] { "dooropen", "isopen" });
+            if (entry.DoorOpenBool != null)
+            {
+                entry.LastDoorOpen = entry.DoorOpenBool.Value;
+            }
+            entry.HasPlayMaker = true;
+            DebugLog.Verbose("DoorSync: PlayMaker hook attached to " + doorTransform.name + " open=" + entry.OpenEventName + " close=" + entry.CloseEventName);
+            return true;
+        }
+
+        private static string FindEventName(PlayMakerFSM fsm, string fallback, string[] tokens)
+        {
+            if (fsm == null || fsm.Fsm == null || tokens == null || tokens.Length == 0)
+            {
+                return fallback;
+            }
+
+            FsmEvent[] events = fsm.Fsm.Events;
+            if (events == null)
+            {
+                return fallback;
+            }
+
+            for (int i = 0; i < events.Length; i++)
+            {
+                FsmEvent ev = events[i];
+                if (ev == null || string.IsNullOrEmpty(ev.Name))
+                {
+                    continue;
+                }
+                for (int t = 0; t < tokens.Length; t++)
+                {
+                    if (ev.Name.IndexOf(tokens[t], StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        return ev.Name;
+                    }
+                }
+            }
+
+            return fallback;
+        }
+
+        private void EnqueueDoorEvent(DoorEntry entry, bool open)
+        {
+            if (entry == null)
+            {
+                return;
+            }
+
+            DoorEventData data = new DoorEventData
+            {
+                DoorId = entry.Id,
+                Open = open ? (byte)1 : (byte)0
+            };
+            _doorEventQueue.Add(data);
+        }
+
+        internal void NotifyDoorPlayMaker(uint doorId, bool open, string triggerEvent)
+        {
+            DoorEntry entry;
+            if (!_doorLookup.TryGetValue(doorId, out entry))
+            {
+                return;
+            }
+
+            float now = Time.realtimeSinceStartup;
+            if (now < entry.SuppressPlayMakerUntilTime)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(triggerEvent))
+            {
+                string expected = open ? entry.OpenEventName : entry.CloseEventName;
+                if (!string.IsNullOrEmpty(expected) && !string.Equals(expected, triggerEvent, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            entry.LastDoorOpen = open;
+            entry.LastLocalChangeTime = now;
+            EnqueueDoorEvent(entry, open);
+        }
+
+        private static string BuildDoorKey(HingeJoint hinge)
+        {
+            if (hinge == null || hinge.transform == null)
+            {
+                return string.Empty;
+            }
+
+            string path = BuildDebugPath(hinge.transform);
+            Vector3 axis = hinge.axis;
+            Vector3 anchor = hinge.anchor;
+            return string.Concat(
+                path,
+                "|a:", FormatVec3(axis),
+                "|h:", FormatVec3(anchor));
+        }
+
+        private static string BuildDebugPath(Transform transform)
         {
             if (transform == null)
             {
@@ -390,12 +704,16 @@ namespace MyWinterCarMpMod.Sync
             Transform current = transform;
             while (current != null)
             {
-                string name = current.name + "#" + current.GetSiblingIndex();
-                parts.Push(name);
+                parts.Push(current.name + "#" + current.GetSiblingIndex());
                 current = current.parent;
             }
 
             return string.Join("/", parts.ToArray());
+        }
+
+        private static string FormatVec3(Vector3 value)
+        {
+            return string.Format(CultureInfo.InvariantCulture, "{0:F3},{1:F3},{2:F3}", value.x, value.y, value.z);
         }
 
         private static uint HashPath(string path)
@@ -416,10 +734,55 @@ namespace MyWinterCarMpMod.Sync
             return hash;
         }
 
+        private void DumpDoorsOnce(string reason)
+        {
+            if (_dumpedDoors)
+            {
+                return;
+            }
+            _dumpedDoors = true;
+
+            try
+            {
+                string root = Paths.BepInExRootPath;
+                string scene = string.IsNullOrEmpty(_lastSceneName) ? "UnknownScene" : _lastSceneName.Replace(" ", string.Empty);
+                string fileName = "DoorDump_" + scene + "_" + Process.GetCurrentProcess().Id + ".log";
+                string path = Path.Combine(root, fileName);
+                using (StreamWriter writer = new StreamWriter(path, false, new System.Text.UTF8Encoding(false)))
+                {
+                    writer.WriteLine("DoorSync dump: " + reason);
+                    writer.WriteLine("Scene: " + _lastSceneName + " Index=" + _lastSceneIndex);
+                    writer.WriteLine("Count: " + _doors.Count);
+                    for (int i = 0; i < _doors.Count; i++)
+                    {
+                        DoorEntry entry = _doors[i];
+                        string name = entry.Transform != null ? entry.Transform.name : "<null>";
+                        string pos = entry.Transform != null ? FormatVec3(entry.Transform.localPosition) : "<null>";
+                        writer.WriteLine(entry.Id + " key=" + entry.Key + " path=" + entry.DebugPath + " name=" + name + " pos=" + pos);
+                    }
+                }
+                DebugLog.Warn("DoorSync: dumped door registry to " + path);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Warn("DoorSync dump failed: " + ex.Message);
+            }
+        }
+
+        private static bool IsNewerSequence(uint seq, uint last)
+        {
+            if (seq == 0 || seq == last)
+            {
+                return false;
+            }
+            return seq > last;
+        }
+
         private sealed class DoorEntry
         {
             public uint Id;
-            public string Path;
+            public string Key;
+            public string DebugPath;
             public Transform Transform;
             public Rigidbody Rigidbody;
             public HingeJoint Hinge;
@@ -429,7 +792,62 @@ namespace MyWinterCarMpMod.Sync
             public float LastLocalChangeTime;
             public float SuppressUntilTime;
             public float RemoteApplyUntilTime;
+            public uint LastRemoteSequence;
             public long LastRemoteTimeMs;
+            public PlayMakerFSM Fsm;
+            public FsmBool DoorOpenBool;
+            public bool HasPlayMaker;
+            public string MpOpenEventName;
+            public string MpCloseEventName;
+            public string OpenEventName;
+            public string CloseEventName;
+            public bool LastDoorOpen;
+            public float SuppressPlayMakerUntilTime;
+            public uint LastRemoteEventSequence;
+        }
+
+        private sealed class DoorCandidate
+        {
+            public HingeJoint Hinge;
+            public string Key;
+            public string DebugPath;
+        }
+
+        private sealed class DoorPlayMakerAction : FsmStateAction
+        {
+            private readonly DoorSync _owner;
+            private readonly uint _doorId;
+            private readonly bool _open;
+            private readonly string _expectedEvent;
+
+            public DoorPlayMakerAction(DoorSync owner, uint doorId, bool open, string expectedEvent)
+            {
+                _owner = owner;
+                _doorId = doorId;
+                _open = open;
+                _expectedEvent = expectedEvent;
+            }
+
+            public override void OnEnter()
+            {
+                Finish();
+
+                if (State == null || State.Fsm == null || State.Fsm.LastTransition == null)
+                {
+                    return;
+                }
+
+                string trigger = State.Fsm.LastTransition.EventName;
+                if (!string.IsNullOrEmpty(_expectedEvent) && !string.Equals(trigger, _expectedEvent, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                if (_owner != null)
+                {
+                    _owner.NotifyDoorPlayMaker(_doorId, _open, trigger);
+                }
+            }
         }
     }
 }
