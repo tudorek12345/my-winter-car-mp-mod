@@ -24,7 +24,8 @@ namespace MyWinterCarMpMod.Net
         OwnershipRequest = 16,
         OwnershipUpdate = 17,
         WorldState = 18,
-        WorldStateAck = 19
+        WorldStateAck = 19,
+        DoorHingeState = 20
     }
 
     public enum SyncObjectKind : byte
@@ -142,6 +143,15 @@ namespace MyWinterCarMpMod.Net
         public float RotW;
     }
 
+    public struct DoorHingeStateData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public long UnixTimeMs;
+        public uint DoorId;
+        public float Angle;
+    }
+
     public struct DoorEventData
     {
         public uint SessionId;
@@ -207,6 +217,7 @@ namespace MyWinterCarMpMod.Net
     {
         public uint SessionId;
         public DoorStateData[] Doors;
+        public DoorHingeStateData[] DoorHinges;
         public VehicleStateData[] Vehicles;
         public PickupStateData[] Pickups;
         public OwnershipUpdateData[] Ownership;
@@ -227,6 +238,7 @@ namespace MyWinterCarMpMod.Net
         public ProgressMarkerData ProgressMarker;
         public SceneReadyData SceneReady;
         public DoorStateData DoorState;
+        public DoorHingeStateData DoorHingeState;
         public DoorEventData DoorEvent;
         public VehicleStateData VehicleState;
         public PickupStateData PickupState;
@@ -238,7 +250,7 @@ namespace MyWinterCarMpMod.Net
     public static class Protocol
     {
         public const uint Magic = 0x4D575331;
-        public const ushort Version = 6;
+        public const ushort Version = 7;
         private const int MaxStringBytes = 4096;
         private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
@@ -414,6 +426,21 @@ namespace MyWinterCarMpMod.Net
             }
         }
 
+        public static byte[] BuildDoorHingeState(DoorHingeStateData state)
+        {
+            using (MemoryStream stream = new MemoryStream(32))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.DoorHingeState);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
+                writer.Write(state.UnixTimeMs);
+                writer.Write(state.DoorId);
+                writer.Write(state.Angle);
+                return stream.ToArray();
+            }
+        }
+
         public static byte[] BuildDoorEvent(DoorEventData state)
         {
             using (MemoryStream stream = new MemoryStream(32))
@@ -513,6 +540,7 @@ namespace MyWinterCarMpMod.Net
                 WriteHeader(writer, MessageType.WorldState);
                 writer.Write(state.SessionId);
                 WriteDoorStateList(writer, state.Doors);
+                WriteDoorHingeStateList(writer, state.DoorHinges);
                 WriteVehicleStateList(writer, state.Vehicles);
                 WritePickupStateList(writer, state.Pickups);
                 WriteOwnershipList(writer, state.Ownership);
@@ -679,6 +707,16 @@ namespace MyWinterCarMpMod.Net
                                 RotW = reader.ReadSingle()
                             };
                             break;
+                        case MessageType.DoorHingeState:
+                            result.DoorHingeState = new DoorHingeStateData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64(),
+                                DoorId = reader.ReadUInt32(),
+                                Angle = reader.ReadSingle()
+                            };
+                            break;
                         case MessageType.DoorEvent:
                             result.DoorEvent = new DoorEventData
                             {
@@ -750,6 +788,7 @@ namespace MyWinterCarMpMod.Net
                             {
                                 SessionId = reader.ReadUInt32(),
                                 Doors = ReadDoorStateList(reader),
+                                DoorHinges = ReadDoorHingeStateList(reader),
                                 Vehicles = ReadVehicleStateList(reader),
                                 Pickups = ReadPickupStateList(reader),
                                 Ownership = ReadOwnershipList(reader)
@@ -785,6 +824,9 @@ namespace MyWinterCarMpMod.Net
                             break;
                         case MessageType.DoorState:
                             result.SessionId = result.DoorState.SessionId;
+                            break;
+                        case MessageType.DoorHingeState:
+                            result.SessionId = result.DoorHingeState.SessionId;
                             break;
                         case MessageType.DoorEvent:
                             result.SessionId = result.DoorEvent.SessionId;
@@ -828,6 +870,20 @@ namespace MyWinterCarMpMod.Net
             for (int i = 0; i < states.Length; i++)
             {
                 WriteDoorState(writer, states[i]);
+            }
+        }
+
+        private static void WriteDoorHingeStateList(BinaryWriter writer, DoorHingeStateData[] states)
+        {
+            if (states == null)
+            {
+                writer.Write(0);
+                return;
+            }
+            writer.Write(states.Length);
+            for (int i = 0; i < states.Length; i++)
+            {
+                WriteDoorHingeState(writer, states[i]);
             }
         }
 
@@ -884,6 +940,21 @@ namespace MyWinterCarMpMod.Net
             for (int i = 0; i < count; i++)
             {
                 states[i] = ReadDoorState(reader);
+            }
+            return states;
+        }
+
+        private static DoorHingeStateData[] ReadDoorHingeStateList(BinaryReader reader)
+        {
+            int count = ReadCount(reader);
+            if (count == 0)
+            {
+                return new DoorHingeStateData[0];
+            }
+            DoorHingeStateData[] states = new DoorHingeStateData[count];
+            for (int i = 0; i < count; i++)
+            {
+                states[i] = ReadDoorHingeState(reader);
             }
             return states;
         }
@@ -945,6 +1016,15 @@ namespace MyWinterCarMpMod.Net
             writer.Write(state.RotW);
         }
 
+        private static void WriteDoorHingeState(BinaryWriter writer, DoorHingeStateData state)
+        {
+            writer.Write(state.SessionId);
+            writer.Write(state.Sequence);
+            writer.Write(state.UnixTimeMs);
+            writer.Write(state.DoorId);
+            writer.Write(state.Angle);
+        }
+
         private static void WriteVehicleState(BinaryWriter writer, VehicleStateData state)
         {
             writer.Write(state.SessionId);
@@ -1002,6 +1082,18 @@ namespace MyWinterCarMpMod.Net
                 RotY = reader.ReadSingle(),
                 RotZ = reader.ReadSingle(),
                 RotW = reader.ReadSingle()
+            };
+        }
+
+        private static DoorHingeStateData ReadDoorHingeState(BinaryReader reader)
+        {
+            return new DoorHingeStateData
+            {
+                SessionId = reader.ReadUInt32(),
+                Sequence = reader.ReadUInt32(),
+                UnixTimeMs = reader.ReadInt64(),
+                DoorId = reader.ReadUInt32(),
+                Angle = reader.ReadSingle()
             };
         }
 

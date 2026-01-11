@@ -40,12 +40,14 @@ namespace MyWinterCarMpMod.Net
         private uint _outSequence;
         private uint _lastHostSequence;
         private uint _doorSequence;
+        private uint _doorHingeSequence;
         private uint _vehicleSequence;
         private uint _doorEventSequence;
         private uint _pickupSequence;
         private string _status = "Client idle";
         private readonly PlayerLocator _playerLocator = new PlayerLocator();
         private readonly System.Collections.Generic.List<DoorStateData> _doorSendBuffer = new System.Collections.Generic.List<DoorStateData>(32);
+        private readonly System.Collections.Generic.List<DoorHingeStateData> _doorHingeSendBuffer = new System.Collections.Generic.List<DoorHingeStateData>(32);
         private readonly System.Collections.Generic.List<VehicleStateData> _vehicleSendBuffer = new System.Collections.Generic.List<VehicleStateData>(16);
         private readonly System.Collections.Generic.List<PickupStateData> _pickupSendBuffer = new System.Collections.Generic.List<PickupStateData>(32);
         private readonly System.Collections.Generic.List<DoorEventData> _doorEventSendBuffer = new System.Collections.Generic.List<DoorEventData>(16);
@@ -140,6 +142,8 @@ namespace MyWinterCarMpMod.Net
             _pendingReconnect = false;
             _reconnectAttempts = 0;
             _sessionId = 0;
+            _doorSequence = 0;
+            _doorHingeSequence = 0;
             _playerLocator.Clear();
             _pendingLevelIndex = int.MinValue;
             _pendingLevelName = string.Empty;
@@ -190,6 +194,7 @@ namespace MyWinterCarMpMod.Net
                     if (_worldStateReceived)
                     {
                         SendDoorStates(now);
+                        SendDoorHingeStates(now);
                         SendDoorEvents();
                         SendVehicleStates(now);
                         SendPickupStates(now);
@@ -411,6 +416,19 @@ namespace MyWinterCarMpMod.Net
                         _doorSync.ApplyRemote(message.DoorState);
                     }
                     break;
+                case MessageType.DoorHingeState:
+                    if (_doorSync != null)
+                    {
+                        if (_verbose && Time.realtimeSinceStartup >= _nextDoorReceiveLogTime)
+                        {
+                            DebugLog.Verbose("Client: recv DoorHinge id=" + message.DoorHingeState.DoorId +
+                                " angle=" + message.DoorHingeState.Angle.ToString("F1") +
+                                " seq=" + message.DoorHingeState.Sequence);
+                            _nextDoorReceiveLogTime = Time.realtimeSinceStartup + 1f;
+                        }
+                        _doorSync.ApplyRemoteHinge(message.DoorHingeState);
+                    }
+                    break;
                 case MessageType.DoorEvent:
                     if (_doorSync != null)
                     {
@@ -519,6 +537,33 @@ namespace MyWinterCarMpMod.Net
                 state.SessionId = _sessionId;
                 state.Sequence = _doorSequence;
                 byte[] payload = Protocol.BuildDoorState(state);
+                if (_transport.Kind == TransportKind.SteamP2P)
+                {
+                    _transport.SendTo(_settings.SpectatorHostSteamId.Value, payload, false);
+                }
+                else
+                {
+                    _transport.Send(payload, false);
+                }
+            }
+        }
+
+        private void SendDoorHingeStates(float now)
+        {
+            if (_doorSync == null || !_doorSync.Enabled)
+            {
+                return;
+            }
+
+            long unixTimeMs = GetUnixTimeMs();
+            int count = _doorSync.CollectHingeChanges(unixTimeMs, now, _doorHingeSendBuffer);
+            for (int i = 0; i < count; i++)
+            {
+                DoorHingeStateData state = _doorHingeSendBuffer[i];
+                _doorHingeSequence++;
+                state.SessionId = _sessionId;
+                state.Sequence = _doorHingeSequence;
+                byte[] payload = Protocol.BuildDoorHingeState(state);
                 if (_transport.Kind == TransportKind.SteamP2P)
                 {
                     _transport.SendTo(_settings.SpectatorHostSteamId.Value, payload, false);
@@ -713,6 +758,14 @@ namespace MyWinterCarMpMod.Net
                 }
             }
 
+            if (_doorSync != null && state.DoorHinges != null)
+            {
+                for (int i = 0; i < state.DoorHinges.Length; i++)
+                {
+                    _doorSync.ApplyRemoteHinge(state.DoorHinges[i]);
+                }
+            }
+
             if (_vehicleSync != null && state.Vehicles != null)
             {
                 for (int i = 0; i < state.Vehicles.Length; i++)
@@ -758,6 +811,7 @@ namespace MyWinterCarMpMod.Net
             }
 
             DebugLog.Info("World state applied. Doors=" + (state.Doors != null ? state.Doors.Length : 0) +
+                          " DoorHinges=" + (state.DoorHinges != null ? state.DoorHinges.Length : 0) +
                           " Vehicles=" + (state.Vehicles != null ? state.Vehicles.Length : 0) +
                           " Pickups=" + (state.Pickups != null ? state.Pickups.Length : 0) +
                           " | Ack sent Session=" + _sessionId + " Host=" + _hostSteamId);
@@ -856,6 +910,7 @@ namespace MyWinterCarMpMod.Net
             _outSequence = 0;
             _lastHostSequence = 0;
             _doorSequence = 0;
+            _doorHingeSequence = 0;
             _vehicleSequence = 0;
             _doorEventSequence = 0;
             _pickupSequence = 0;
@@ -896,6 +951,7 @@ namespace MyWinterCarMpMod.Net
             _playerLocator.Clear();
             _progressMarker = string.Empty;
             _vehicleSequence = 0;
+            _doorHingeSequence = 0;
             _pendingLevelIndex = int.MinValue;
             _pendingLevelName = string.Empty;
             _sceneReadySent = false;

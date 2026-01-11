@@ -19,6 +19,7 @@ namespace MyWinterCarMpMod.Net
         private readonly PlayerLocator _playerLocator = new PlayerLocator();
         private readonly DoorSync _doorSync;
         private readonly System.Collections.Generic.List<DoorStateData> _doorSendBuffer = new System.Collections.Generic.List<DoorStateData>(32);
+        private readonly System.Collections.Generic.List<DoorHingeStateData> _doorHingeSendBuffer = new System.Collections.Generic.List<DoorHingeStateData>(32);
         private readonly VehicleSync _vehicleSync;
         private readonly System.Collections.Generic.List<VehicleStateData> _vehicleSendBuffer = new System.Collections.Generic.List<VehicleStateData>(16);
         private readonly PickupSync _pickupSync;
@@ -41,6 +42,7 @@ namespace MyWinterCarMpMod.Net
         private uint _outSequence;
         private uint _lastClientSequence;
         private uint _doorSequence;
+        private uint _doorHingeSequence;
         private uint _vehicleSequence;
         private uint _doorEventSequence;
         private uint _pickupSequence;
@@ -141,6 +143,7 @@ namespace MyWinterCarMpMod.Net
             _outSequence = 0;
             _lastClientSequence = 0;
             _doorSequence = 0;
+            _doorHingeSequence = 0;
             _vehicleSequence = 0;
             _doorEventSequence = 0;
             _pickupSequence = 0;
@@ -243,6 +246,7 @@ namespace MyWinterCarMpMod.Net
                     if (_clientSceneReady)
                     {
                         SendDoorStates(now);
+                        SendDoorHingeStates(now);
                         SendDoorEvents();
                     }
                     if (_clientSceneReady && _worldStateAcked)
@@ -398,6 +402,12 @@ namespace MyWinterCarMpMod.Net
                         _doorSync.ApplyRemote(message.DoorState);
                     }
                     break;
+                case MessageType.DoorHingeState:
+                    if (_doorSync != null)
+                    {
+                        _doorSync.ApplyRemoteHinge(message.DoorHingeState);
+                    }
+                    break;
                 case MessageType.DoorEvent:
                     if (_doorSync != null)
                     {
@@ -542,6 +552,7 @@ namespace MyWinterCarMpMod.Net
             _clientSceneLevelIndex = int.MinValue;
             _clientSceneLevelName = string.Empty;
             _doorSequence = 0;
+            _doorHingeSequence = 0;
             _vehicleSequence = 0;
             _doorEventSequence = 0;
             _pickupSequence = 0;
@@ -679,6 +690,26 @@ namespace MyWinterCarMpMod.Net
             }
         }
 
+        private void SendDoorHingeStates(float now)
+        {
+            if (_doorSync == null || !_doorSync.Enabled)
+            {
+                return;
+            }
+
+            long unixTimeMs = GetUnixTimeMs();
+            int count = _doorSync.CollectHingeChanges(unixTimeMs, now, _doorHingeSendBuffer);
+            for (int i = 0; i < count; i++)
+            {
+                DoorHingeStateData state = _doorHingeSendBuffer[i];
+                _doorHingeSequence++;
+                state.SessionId = _sessionId;
+                state.Sequence = _doorHingeSequence;
+                byte[] payload = Protocol.BuildDoorHingeState(state);
+                _transport.Send(payload, false);
+            }
+        }
+
         private void SendDoorEvents()
         {
             if (_doorSync == null || !_doorSync.Enabled)
@@ -791,6 +822,7 @@ namespace MyWinterCarMpMod.Net
             long unixTimeMs = GetUnixTimeMs();
 
             DoorStateData[] doors = _doorSync != null ? _doorSync.BuildSnapshot(unixTimeMs, _sessionId) : new DoorStateData[0];
+            DoorHingeStateData[] doorHinges = _doorSync != null ? _doorSync.BuildHingeSnapshot(unixTimeMs, _sessionId) : new DoorHingeStateData[0];
             VehicleStateData[] vehicles = _vehicleSync != null ? _vehicleSync.BuildSnapshot(unixTimeMs, _sessionId) : new VehicleStateData[0];
             PickupStateData[] pickups = _pickupSync != null ? _pickupSync.BuildSnapshot(unixTimeMs, _sessionId) : new PickupStateData[0];
 
@@ -815,6 +847,7 @@ namespace MyWinterCarMpMod.Net
             {
                 SessionId = _sessionId,
                 Doors = doors,
+                DoorHinges = doorHinges,
                 Vehicles = vehicles,
                 Pickups = pickups,
                 Ownership = ownershipList.ToArray()
@@ -827,6 +860,10 @@ namespace MyWinterCarMpMod.Net
             {
                 _doorSequence = 1;
             }
+            if (_doorHingeSequence < 1)
+            {
+                _doorHingeSequence = 1;
+            }
             if (_vehicleSequence < 1)
             {
                 _vehicleSequence = 1;
@@ -838,9 +875,9 @@ namespace MyWinterCarMpMod.Net
 
             if (_log != null)
             {
-                _log.LogDebug("WorldState sending attempt " + _worldStateAttempts + " Session=" + _sessionId + " Doors=" + doors.Length + " Vehicles=" + vehicles.Length + " Pickups=" + pickups.Length + " Ownership=" + ownershipList.Count);
+                _log.LogDebug("WorldState sending attempt " + _worldStateAttempts + " Session=" + _sessionId + " Doors=" + doors.Length + " DoorHinges=" + doorHinges.Length + " Vehicles=" + vehicles.Length + " Pickups=" + pickups.Length + " Ownership=" + ownershipList.Count);
             }
-            DebugLog.Verbose("WorldState sent. Doors=" + doors.Length + " Vehicles=" + vehicles.Length + " Pickups=" + pickups.Length + " Ownership=" + ownershipList.Count);
+            DebugLog.Verbose("WorldState sent. Doors=" + doors.Length + " DoorHinges=" + doorHinges.Length + " Vehicles=" + vehicles.Length + " Pickups=" + pickups.Length + " Ownership=" + ownershipList.Count);
         }
 
         private void ResetConnection(string status)
@@ -854,6 +891,7 @@ namespace MyWinterCarMpMod.Net
             _outSequence = 0;
             _lastClientSequence = 0;
             _vehicleSequence = 0;
+            _doorHingeSequence = 0;
             _clientSceneReady = false;
             _clientSceneLevelIndex = int.MinValue;
             _clientSceneLevelName = string.Empty;

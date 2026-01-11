@@ -68,7 +68,7 @@ namespace MyWinterCarMpMod
             DebugLog.Info("Mode=" + _settings.Mode.Value + " Transport=" + _settings.Transport.Value + " HostPort=" + _settings.HostPort.Value + " DiscoveryPort=" + _settings.LanDiscoveryPort.Value);
 
             _overlay = new Overlay();
-            _remoteAvatar = new RemotePlayerAvatar();
+            _remoteAvatar = new RemotePlayerAvatar(_settings);
             _doorSync = new DoorSync(_settings);
             _vehicleSync = new VehicleSync(_settings);
             _pickupSync = new PickupSync(_settings);

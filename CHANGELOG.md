@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4 - 2026-01-11
+- Added vehicle hinge door updates (protocol v7) and spring-based remote apply to avoid car jumps.
+- Updated vehicle door rotation policy with clearer logging and safe fallback for non-physics doors.
+- Expanded DoorSync name filter defaults to include sink/tap hinges.
+- Added avatar AssetBundle config (BundlePath, AssetName, Scale, YOffset).
+
 ## 0.1.3 - 2026-01-11
 - DoorSync now maps PlayMaker FSMs to door pivots/hinges and merges FSMs into hinge entries.
 - Added door rescan when transforms/FSMs go missing to reduce desync.

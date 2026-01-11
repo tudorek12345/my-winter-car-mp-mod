@@ -2,7 +2,7 @@
 
 
 ## Current Status
-Host and client can connect in-game and both see the remote capsule rig. Interior room doors and the cabin front entrance sync. The cabin back door is still not syncing, and vehicle doors can jitter/jump the car when opened.
+Host and client can connect in-game and both see the remote capsule rig. Interior room doors plus the cabin front/back entrances sync. Vehicle doors are still WIP (hinge path added, reliability pending).
 
 OFFICIAL DISCORD
 https://discord.gg/GQeC5tCH2w
@@ -13,16 +13,18 @@ https://discord.gg/GQeC5tCH2w
 - Steam P2P or TCP LAN (LAN discovery + in-game join panel).
 - Main menu co-op panel + on-screen overlay.
 - Session handshake, keepalive pings, timeouts, auto-reconnect.
-- Door sync via PlayMaker events + hinge rotation (experimental).
-- Remote avatar rendered as simple primitives.
+- Door sync via PlayMaker events + hinge joints (room + cabin doors).
+- Vehicle door hinge sync (experimental, avoids direct rotation).
+- Pickup sync (experimental) for cabin items when enabled.
+- Remote avatar rendered as primitives, with optional AssetBundle swap.
 - Per-instance debug logs for easier troubleshooting.
 - Per-instance config overrides (`--mwc-config` or `MWC_MPM_CONFIG`).
 
 ## Known Limitations
-- No world/physics/vehicles/items/AI/time-of-day sync.
-- Remote player is visual-only primitives (no collisions or interactions).
-- Door sync is best-effort; the cabin back door does not sync yet.
-- Vehicle doors can cause physics jitter/jumps on the remote car.
+- No full world/AI/time-of-day sync yet; VehicleSync is experimental and off by default.
+- Remote player is visual-only (no collisions); avatar mesh swap is cosmetic only.
+- Vehicle doors are still WIP and may not sync or may jitter.
+- Non-door interactables (sink/phone/etc.) need PickupSync or upcoming FSM hooks.
 - Level sync is still being stabilized; clients may need retries.
 - LAN/Steam P2P is still experimental and may require retries.
 
@@ -85,9 +87,33 @@ LanDiscovery:
 
 DoorSync:
 - `Enabled = true`
+- `PlayMakerEvents = true`
 - `SendHz = 10`
 - `AngleThreshold = 1`
-- `NameFilter = door,ovi` (empty = all hinges)
+- `NameFilter = door,ovi,tap,faucet,sink` (empty = all hinges)
+
+PickupSync:
+- `Enabled = false` (set true to sync cabin pickups like phone/props)
+- `ClientSend = false`
+- `SendHz = 12`
+- `PositionThreshold = 0.02`
+- `RotationThreshold = 2.0`
+- `NameFilter = ` (optional filter, comma-separated)
+
+VehicleSync:
+- `Enabled = false` (experimental, Sorbet sync WIP)
+- `ClientSend = false`
+- `OwnershipEnabled = true`
+- `SeatDistance = 1.2`
+- `SendHz = 10`
+- `PositionThreshold = 0.05`
+- `RotationThreshold = 1.0`
+
+Avatar:
+- `BundlePath = C:\path\to\bundle`
+- `AssetName = YourAvatarPrefab`
+- `Scale = 1.0`
+- `YOffset = 0.0`
 
 Networking:
 - `ConnectionTimeoutSeconds = 10`
@@ -104,6 +130,11 @@ Spectator:
 ## Logs
 - BepInEx global log: `BepInEx/LogOutput.log`
 - Per-instance mod log: `BepInEx/LogOutput_MyWinterCarMpMod_<pid>.log`
+
+## Avatar Setup (AssetBundle)
+1. Extract or build an AssetBundle that contains a player prefab or mesh.
+2. Set `Avatar.BundlePath` to the bundle path and `Avatar.AssetName` to the prefab/mesh name.
+3. Tune `Avatar.Scale` and `Avatar.YOffset` if the model is too big/small or sinks into the ground.
 
 ## Dev Guide
 See `instructions.txt` for iteration, build, deploy, and multi-instance notes.

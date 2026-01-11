@@ -28,6 +28,10 @@ namespace MyWinterCarMpMod.Config
         public ConfigEntry<bool> MainMenuPanelEnabled;
         public ConfigEntry<bool> VerboseLogging;
         public ConfigEntry<bool> AllowMultipleInstances;
+        public ConfigEntry<string> RemoteAvatarBundlePath;
+        public ConfigEntry<string> RemoteAvatarAssetName;
+        public ConfigEntry<float> RemoteAvatarScale;
+        public ConfigEntry<float> RemoteAvatarYOffset;
 
         public ConfigEntry<ulong> SpectatorHostSteamId;
         public ConfigEntry<ulong> AllowOnlySteamId;
@@ -83,6 +87,10 @@ namespace MyWinterCarMpMod.Config
             MainMenuPanelEnabled = config.Bind("UI", "MainMenuPanelEnabled", true, "Show co-op menu panel on the main menu.");
             VerboseLogging = config.Bind("General", "VerboseLogging", false, "Enable verbose logging.");
             AllowMultipleInstances = config.Bind("Compatibility", "AllowMultipleInstances", false, "Skip Steam restart checks and Steam API init (restart required).");
+            RemoteAvatarBundlePath = config.Bind("Avatar", "BundlePath", "", "Optional AssetBundle path for a static remote avatar mesh/prefab.");
+            RemoteAvatarAssetName = config.Bind("Avatar", "AssetName", "", "Prefab or Mesh name inside the avatar AssetBundle.");
+            RemoteAvatarScale = config.Bind("Avatar", "Scale", 1.0f, "Scale for the remote avatar mesh.");
+            RemoteAvatarYOffset = config.Bind("Avatar", "YOffset", 0.0f, "Vertical offset for the remote avatar mesh.");
 
             SpectatorHostSteamId = config.Bind("SteamP2P", "SpectatorHostSteamId", 0ul, "Client sets host SteamID64 (0 to show in overlay).");
             AllowOnlySteamId = config.Bind("SteamP2P", "AllowOnlySteamId", 0ul, "Host allowlist SteamID64 (0 allows first client).");
@@ -99,7 +107,7 @@ namespace MyWinterCarMpMod.Config
             DoorPlayMakerEnabled = config.Bind("DoorSync", "PlayMakerEvents", true, "Use PlayMaker door open/close events when available.");
             DoorSendHz = config.Bind("DoorSync", "SendHz", 10, "Door state send rate in Hz (1-30).");
             DoorAngleThreshold = config.Bind("DoorSync", "AngleThreshold", 1.0f, "Minimum angle change (degrees) before sending.");
-            DoorNameFilter = config.Bind("DoorSync", "NameFilter", "door,ovi", "Case-insensitive name filter for door objects (empty = all hinges). Comma-separated tokens.");
+            DoorNameFilter = config.Bind("DoorSync", "NameFilter", "door,ovi,tap,faucet,sink", "Case-insensitive name filter for door objects (empty = all hinges). Comma-separated tokens.");
 
             VehicleSyncEnabled = config.Bind("VehicleSync", "Enabled", false, "Sync vehicle rigidbody states (experimental).");
             VehicleSyncClientSend = config.Bind("VehicleSync", "ClientSend", false, "Allow clients to send vehicle states (experimental).");
