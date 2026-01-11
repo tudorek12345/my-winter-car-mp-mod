@@ -2,11 +2,7 @@
 
 
 ## Current Status
-<<<<<<< HEAD
 Host and client can connect in-game and both see the remote capsule rig. Interior room doors and the cabin front entrance sync. The cabin back door is still not syncing, and vehicle doors can jitter/jump the car when opened.
-=======
-(Both players) Host and client can now connect in game, both host and client see a primitive body rig/capsule.
->>>>>>> ebed05846ea39fa14168923e89373e10f79cb001
 
 OFFICIAL DISCORD
 https://discord.gg/GQeC5tCH2w
