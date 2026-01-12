@@ -7,20 +7,7 @@ Host and client can connect in-game and both see the remote capsule rig. Interio
 OFFICIAL DISCORD
 https://discord.gg/GQeC5tCH2w
 
-
-## Current Features
-- Two-player host/client.
-- Steam P2P or TCP LAN (LAN discovery + in-game join panel).
-- Main menu co-op panel + on-screen overlay.
-- Session handshake, keepalive pings, timeouts, auto-reconnect.
-- Door sync via PlayMaker events + hinge joints (room + cabin doors).
-- Vehicle door hinge sync (experimental, avoids direct rotation).
-- Pickup sync (experimental) for cabin items when enabled.
-- Remote avatar rendered as primitives, with optional AssetBundle swap.
-- Per-instance debug logs for easier troubleshooting.
-- Per-instance config overrides (`--mwc-config` or `MWC_MPM_CONFIG`).
-
-## Current Version
+## Current Version [STATUS]
 0.1.4 - 2026-01-12
 Added vehicle hinge door updates (protocol v7) and spring-based remote apply to avoid car jumps.
 Updated vehicle door rotation policy with clearer logging and safe fallback for non-physics doors.
