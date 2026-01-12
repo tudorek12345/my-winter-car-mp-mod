@@ -20,13 +20,15 @@ https://discord.gg/GQeC5tCH2w
 - Per-instance debug logs for easier troubleshooting.
 - Per-instance config overrides (`--mwc-config` or `MWC_MPM_CONFIG`).
 
-## Known Limitations
-- No full world/AI/time-of-day sync yet; VehicleSync is experimental and off by default.
-- Remote player is visual-only (no collisions); avatar mesh swap is cosmetic only.
-- Vehicle doors are still WIP and may not sync or may jitter.
-- Non-door interactables (sink/phone/etc.) need PickupSync or upcoming FSM hooks.
-- Level sync is still being stabilized; clients may need retries.
-- LAN/Steam P2P is still experimental and may require retries.
+## Current Version
+0.1.4 - 2026-01-12
+Added vehicle hinge door updates (protocol v7) and spring-based remote apply to avoid car jumps.
+Updated vehicle door rotation policy with clearer logging and safe fallback for non-physics doors.
+Expanded DoorSync name filter defaults to include sink/tap hinges.
+Added avatar AssetBundle config (BundlePath, AssetName, Scale, YOffset).
+Added PlayMaker FSM scanner for sink/phone diagnostics (verbose logging only).
+Added TimeOfDay sync (also logs time for both client and host in overlay)
+
 
 ## Requirements
 - My Winter Car (Windows).
