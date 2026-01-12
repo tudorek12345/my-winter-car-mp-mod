@@ -326,6 +326,10 @@ namespace MyWinterCarMpMod.Sync
                     return false;
                 }
                 entry.Owner = OwnerKind.Client;
+                if (_settings != null && _settings.VerboseLogging.Value)
+                {
+                    DebugLog.Verbose("VehicleSync: ownership granted to Client for vehicle=" + entry.DebugPath);
+                }
                 update = new OwnershipUpdateData
                 {
                     Kind = SyncObjectKind.Vehicle,
@@ -342,6 +346,10 @@ namespace MyWinterCarMpMod.Sync
                     return false;
                 }
                 entry.Owner = OwnerKind.None;
+                if (_settings != null && _settings.VerboseLogging.Value)
+                {
+                    DebugLog.Verbose("VehicleSync: ownership released by Client for vehicle=" + entry.DebugPath);
+                }
                 update = new OwnershipUpdateData
                 {
                     Kind = SyncObjectKind.Vehicle,
