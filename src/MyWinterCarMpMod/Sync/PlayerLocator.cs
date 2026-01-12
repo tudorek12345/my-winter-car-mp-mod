@@ -107,6 +107,38 @@ namespace MyWinterCarMpMod.Sync
             return true;
         }
 
+        public bool TryGetLocalTransforms(out Transform body, out Transform view)
+        {
+            body = null;
+            view = null;
+
+            Transform resolvedBody;
+            Transform resolvedView;
+            if (!TryResolvePlayer(out resolvedBody, out resolvedView))
+            {
+                return false;
+            }
+
+            if (resolvedBody == null)
+            {
+                resolvedBody = resolvedView;
+            }
+
+            if (resolvedView == null)
+            {
+                resolvedView = resolvedBody;
+            }
+
+            if (resolvedBody == null && resolvedView == null)
+            {
+                return false;
+            }
+
+            body = resolvedBody;
+            view = resolvedView;
+            return true;
+        }
+
         private bool TryResolvePlayer(out Transform body, out Transform view)
         {
             body = null;

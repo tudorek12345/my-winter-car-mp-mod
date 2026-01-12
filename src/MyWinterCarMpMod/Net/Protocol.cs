@@ -25,7 +25,8 @@ namespace MyWinterCarMpMod.Net
         OwnershipUpdate = 17,
         WorldState = 18,
         WorldStateAck = 19,
-        DoorHingeState = 20
+        DoorHingeState = 20,
+        TimeState = 21
     }
 
     public enum SyncObjectKind : byte
@@ -152,6 +153,22 @@ namespace MyWinterCarMpMod.Net
         public float Angle;
     }
 
+    public struct TimeStateData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public long UnixTimeMs;
+        public float RotX;
+        public float RotY;
+        public float RotZ;
+        public float RotW;
+        public float SunIntensity;
+        public float AmbientR;
+        public float AmbientG;
+        public float AmbientB;
+        public float AmbientIntensity;
+    }
+
     public struct DoorEventData
     {
         public uint SessionId;
@@ -240,6 +257,7 @@ namespace MyWinterCarMpMod.Net
         public DoorStateData DoorState;
         public DoorHingeStateData DoorHingeState;
         public DoorEventData DoorEvent;
+        public TimeStateData TimeState;
         public VehicleStateData VehicleState;
         public PickupStateData PickupState;
         public OwnershipRequestData OwnershipRequest;
@@ -250,7 +268,7 @@ namespace MyWinterCarMpMod.Net
     public static class Protocol
     {
         public const uint Magic = 0x4D575331;
-        public const ushort Version = 7;
+        public const ushort Version = 8;
         private const int MaxStringBytes = 4096;
         private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
@@ -451,6 +469,28 @@ namespace MyWinterCarMpMod.Net
                 writer.Write(state.Sequence);
                 writer.Write(state.DoorId);
                 writer.Write(state.Open);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildTimeState(TimeStateData state)
+        {
+            using (MemoryStream stream = new MemoryStream(64))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.TimeState);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
+                writer.Write(state.UnixTimeMs);
+                writer.Write(state.RotX);
+                writer.Write(state.RotY);
+                writer.Write(state.RotZ);
+                writer.Write(state.RotW);
+                writer.Write(state.SunIntensity);
+                writer.Write(state.AmbientR);
+                writer.Write(state.AmbientG);
+                writer.Write(state.AmbientB);
+                writer.Write(state.AmbientIntensity);
                 return stream.ToArray();
             }
         }
@@ -717,6 +757,23 @@ namespace MyWinterCarMpMod.Net
                                 Angle = reader.ReadSingle()
                             };
                             break;
+                        case MessageType.TimeState:
+                            result.TimeState = new TimeStateData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64(),
+                                RotX = reader.ReadSingle(),
+                                RotY = reader.ReadSingle(),
+                                RotZ = reader.ReadSingle(),
+                                RotW = reader.ReadSingle(),
+                                SunIntensity = reader.ReadSingle(),
+                                AmbientR = reader.ReadSingle(),
+                                AmbientG = reader.ReadSingle(),
+                                AmbientB = reader.ReadSingle(),
+                                AmbientIntensity = reader.ReadSingle()
+                            };
+                            break;
                         case MessageType.DoorEvent:
                             result.DoorEvent = new DoorEventData
                             {
@@ -830,6 +887,9 @@ namespace MyWinterCarMpMod.Net
                             break;
                         case MessageType.DoorEvent:
                             result.SessionId = result.DoorEvent.SessionId;
+                            break;
+                        case MessageType.TimeState:
+                            result.SessionId = result.TimeState.SessionId;
                             break;
                         case MessageType.VehicleState:
                             result.SessionId = result.VehicleState.SessionId;

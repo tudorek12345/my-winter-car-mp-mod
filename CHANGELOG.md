@@ -5,6 +5,8 @@
 - Updated vehicle door rotation policy with clearer logging and safe fallback for non-physics doors.
 - Expanded DoorSync name filter defaults to include sink/tap hinges.
 - Added avatar AssetBundle config (BundlePath, AssetName, Scale, YOffset).
+- Added PlayMaker FSM scanner for sink/phone diagnostics (verbose logging only).
+- Added TimeOfDay sync (also logs time for both client and host in overlay)
 
 ## 0.1.3 - 2026-01-11
 - DoorSync now maps PlayMaker FSMs to door pivots/hinges and merges FSMs into hinge entries.

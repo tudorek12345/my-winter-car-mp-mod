@@ -13,6 +13,7 @@ namespace MyWinterCarMpMod.UI
         public string RemoteSteamId;
         public string LevelName;
         public string ProgressMarker;
+        public string TimeInfo;
         public string Warning;
         public string Hint;
         public bool IsConnected;
@@ -65,6 +66,11 @@ namespace MyWinterCarMpMod.UI
                     hzText += " (host: " + state.ServerSendHz + ")";
                 }
                 GUILayout.Label("SendHz: " + hzText, _labelStyle);
+            }
+
+            if (!string.IsNullOrEmpty(state.TimeInfo))
+            {
+                GUILayout.Label(state.TimeInfo, _labelStyle);
             }
 
             if (!string.IsNullOrEmpty(state.Warning))

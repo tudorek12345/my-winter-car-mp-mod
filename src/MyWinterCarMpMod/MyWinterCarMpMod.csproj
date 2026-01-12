@@ -86,8 +86,10 @@
     <Compile Include="Sync\ObjectRegistry.cs" />
     <Compile Include="Sync\PickupSync.cs" />
     <Compile Include="Sync\PlayMakerBridge.cs" />
+    <Compile Include="Sync\PlayMakerScanner.cs" />
     <Compile Include="Sync\PlayerLocator.cs" />
     <Compile Include="Sync\RemotePlayerAvatar.cs" />
+    <Compile Include="Sync\TimeOfDaySync.cs" />
     <Compile Include="Sync\VehicleSync.cs" />
     <Compile Include="UI\Overlay.cs" />
     <Compile Include="Util\MainThreadDispatcher.cs" />

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Reflection;
+using HutongGames.PlayMaker;
 using MyWinterCarMpMod.Config;
 using MyWinterCarMpMod.Net;
 using MyWinterCarMpMod.Util;
@@ -19,6 +20,7 @@ namespace MyWinterCarMpMod.Sync
         private string _lastSceneName = string.Empty;
         private float _nextSampleTime;
         private bool _loggedNoVehicles;
+        private bool _loggedSorbetSeatDump;
 
         public VehicleSync(Settings settings)
         {
@@ -88,8 +90,14 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
-                Vector3 pos = entry.Transform.position;
-                Quaternion rot = entry.Transform.rotation;
+                Transform syncTransform = GetSyncTransform(entry);
+                if (syncTransform == null)
+                {
+                    continue;
+                }
+
+                Vector3 pos = syncTransform.position;
+                Quaternion rot = syncTransform.rotation;
                 if (Vector3.Distance(entry.LastSentPosition, pos) < posThreshold &&
                     Quaternion.Angle(entry.LastSentRotation, rot) < rotThreshold)
                 {
@@ -144,7 +152,9 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
-            if (IsLocalAuthority(entry, localOwner, includeUnowned))
+            bool isLocal = IsLocalAuthority(entry, localOwner, includeUnowned);
+            ApplyLocalControl(entry, localOwner);
+            if (isLocal)
             {
                 return;
             }
@@ -160,12 +170,15 @@ namespace MyWinterCarMpMod.Sync
             Vector3 vel = new Vector3(state.VelX, state.VelY, state.VelZ);
             Vector3 angVel = new Vector3(state.AngVelX, state.AngVelY, state.AngVelZ);
 
-            if (entry.Body != null && !entry.Body.isKinematic)
+            if (entry.Body != null)
             {
                 entry.Body.MovePosition(pos);
                 entry.Body.MoveRotation(rot);
-                entry.Body.velocity = vel;
-                entry.Body.angularVelocity = angVel;
+                if (!entry.Body.isKinematic)
+                {
+                    entry.Body.velocity = vel;
+                    entry.Body.angularVelocity = angVel;
+                }
             }
             else if (entry.Transform != null)
             {
@@ -195,6 +208,10 @@ namespace MyWinterCarMpMod.Sync
                 }
 
                 bool wants = IsLocalDriver(entry, localPos, hasLocal);
+                if (wants != entry.LocalWantsControl && _settings != null && _settings.VerboseLogging.Value)
+                {
+                    DebugLog.Verbose("VehicleSync: local driver=" + wants + " vehicle=" + entry.DebugPath);
+                }
                 entry.LocalWantsControl = wants;
 
                 if (wants && entry.Owner != OwnerKind.Client)
@@ -207,6 +224,11 @@ namespace MyWinterCarMpMod.Sync
                             ObjectId = entry.Id,
                             Action = OwnershipAction.Request
                         });
+                        if (_settings != null && _settings.VerboseLogging.Value && now - entry.LastOwnershipLogTime >= 1f)
+                        {
+                            DebugLog.Verbose("VehicleSync: ownership request=Request vehicle=" + entry.DebugPath);
+                            entry.LastOwnershipLogTime = now;
+                        }
                         entry.LastOwnershipRequestTime = now;
                     }
                 }
@@ -220,6 +242,11 @@ namespace MyWinterCarMpMod.Sync
                             ObjectId = entry.Id,
                             Action = OwnershipAction.Release
                         });
+                        if (_settings != null && _settings.VerboseLogging.Value && now - entry.LastOwnershipLogTime >= 1f)
+                        {
+                            DebugLog.Verbose("VehicleSync: ownership request=Release vehicle=" + entry.DebugPath);
+                            entry.LastOwnershipLogTime = now;
+                        }
                         entry.LastOwnershipRequestTime = now;
                     }
                 }
@@ -381,8 +408,9 @@ namespace MyWinterCarMpMod.Sync
             for (int i = 0; i < _vehicles.Count; i++)
             {
                 VehicleEntry entry = _vehicles[i];
-                Vector3 pos = entry.Transform != null ? entry.Transform.position : Vector3.zero;
-                Quaternion rot = entry.Transform != null ? entry.Transform.rotation : Quaternion.identity;
+                Transform syncTransform = GetSyncTransform(entry);
+                Vector3 pos = syncTransform != null ? syncTransform.position : Vector3.zero;
+                Quaternion rot = syncTransform != null ? syncTransform.rotation : Quaternion.identity;
                 Vector3 vel = entry.Body != null ? entry.Body.velocity : Vector3.zero;
                 Vector3 angVel = entry.Body != null ? entry.Body.angularVelocity : Vector3.zero;
                 states[i] = new VehicleStateData
@@ -442,6 +470,25 @@ namespace MyWinterCarMpMod.Sync
             {
                 DebugLog.Verbose("VehicleSync: no vehicles found.");
                 return;
+            }
+
+            string filter = _settings != null ? _settings.GetVehicleNameFilter() : string.Empty;
+            if (!string.IsNullOrEmpty(filter))
+            {
+                for (int i = candidates.Count - 1; i >= 0; i--)
+                {
+                    VehicleCandidate candidate = candidates[i];
+                    string name = candidate.Root != null ? candidate.Root.name : string.Empty;
+                    if (!NameContains(name, filter) && !NameContains(candidate.DebugPath, filter))
+                    {
+                        candidates.RemoveAt(i);
+                    }
+                }
+                if (candidates.Count == 0)
+                {
+                    DebugLog.Warn("VehicleSync: no vehicles matched filter '" + filter + "'.");
+                    return;
+                }
             }
 
             candidates.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
@@ -555,6 +602,7 @@ namespace MyWinterCarMpMod.Sync
 
             Transform seatTransform = FindSeatTransform(root);
 
+            Transform syncTransform = body != null ? body.transform : root.transform;
             VehicleEntry entry = new VehicleEntry
             {
                 Id = id,
@@ -566,12 +614,18 @@ namespace MyWinterCarMpMod.Sync
                 SeatTransform = seatTransform,
                 Owner = OwnerKind.None,
                 OriginalController = dynamics != null ? dynamics.controller : CarDynamics.Controller.axis,
-                LastSentPosition = root.transform.position,
-                LastSentRotation = root.transform.rotation
+                LastSentPosition = syncTransform != null ? syncTransform.position : Vector3.zero,
+                LastSentRotation = syncTransform != null ? syncTransform.rotation : Quaternion.identity
             };
 
             _vehicles.Add(entry);
             _vehicleLookup.Add(id, entry);
+            if (syncTransform != null)
+            {
+                DebugLog.Info("VehicleSync: add vehicle id=" + entry.Id + " root=" + root.name + " sync=" + syncTransform.name + " path=" + debugPath);
+            }
+
+            AttachSeatTriggers(entry, root);
         }
 
         private bool IsLocalAuthority(VehicleEntry entry, OwnerKind localOwner, bool includeUnowned)
@@ -596,18 +650,37 @@ namespace MyWinterCarMpMod.Sync
         {
             if (entry == null || entry.CarDynamics == null)
             {
-                return;
+                if (entry == null || entry.Body == null)
+                {
+                    return;
+                }
             }
 
             bool allowUnowned = localOwner == OwnerKind.Host;
             bool isLocal = entry.Owner == localOwner || (allowUnowned && entry.Owner == OwnerKind.None);
-            if (isLocal)
+            if (!entry.ControlInitialized || entry.LastControlIsLocal != isLocal)
             {
-                entry.CarDynamics.SetController(entry.OriginalController.ToString());
+                if (entry.CarDynamics != null)
+                {
+                    if (isLocal)
+                    {
+                        entry.CarDynamics.SetController(entry.OriginalController.ToString());
+                    }
+                    else
+                    {
+                        entry.CarDynamics.SetController(CarDynamics.Controller.external.ToString());
+                    }
+                }
+                entry.LastControlIsLocal = isLocal;
+                entry.ControlInitialized = true;
             }
-            else
+
+            if (entry.Body != null)
             {
-                entry.CarDynamics.SetController(CarDynamics.Controller.external.ToString());
+                if (entry.Body.isKinematic)
+                {
+                    entry.Body.isKinematic = false;
+                }
             }
         }
 
@@ -631,6 +704,22 @@ namespace MyWinterCarMpMod.Sync
                 return false;
             }
 
+            if (entry.LocalDriverFromFsm)
+            {
+                return true;
+            }
+
+            Transform body;
+            Transform view;
+            if (_playerLocator.TryGetLocalTransforms(out body, out view))
+            {
+                Transform root = entry.Transform;
+                if (IsChildOf(body, root) || IsChildOf(view, root))
+                {
+                    return true;
+                }
+            }
+
             CarCameras cameras = FindCarCameras();
             if (cameras != null && cameras.driverView && cameras.mtarget != null)
             {
@@ -649,6 +738,19 @@ namespace MyWinterCarMpMod.Sync
 
             float dist = Vector3.Distance(localPos, entry.SeatTransform.position);
             return dist <= _settings.GetVehicleSeatDistance();
+        }
+
+        private static bool IsChildOf(Transform child, Transform parent)
+        {
+            if (child == null || parent == null)
+            {
+                return false;
+            }
+            if (child == parent)
+            {
+                return true;
+            }
+            return child.IsChildOf(parent);
         }
 
         private CarCameras FindCarCameras()
@@ -724,6 +826,132 @@ namespace MyWinterCarMpMod.Sync
             return null;
         }
 
+        private void AttachSeatTriggers(VehicleEntry entry, GameObject root)
+        {
+            if (entry == null || root == null)
+            {
+                return;
+            }
+
+            PlayMakerFSM[] fsms = root.GetComponentsInChildren<PlayMakerFSM>(true);
+            if (fsms == null || fsms.Length == 0)
+            {
+                return;
+            }
+
+            PlayMakerFSM best = null;
+            for (int i = 0; i < fsms.Length; i++)
+            {
+                PlayMakerFSM fsm = fsms[i];
+                if (fsm == null || fsm.Fsm == null)
+                {
+                    continue;
+                }
+                string fsmName = !string.IsNullOrEmpty(fsm.Fsm.Name) ? fsm.Fsm.Name : fsm.FsmName;
+                if (!string.Equals(fsmName, "PlayerTrigger", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (best == null)
+                {
+                    best = fsm;
+                }
+
+                string objName = fsm.gameObject != null ? fsm.gameObject.name : string.Empty;
+                if (objName.IndexOf("Drive", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    objName.IndexOf("Driver", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    best = fsm;
+                    break;
+                }
+            }
+
+            if (best == null)
+            {
+                return;
+            }
+
+            FsmState enterState = best.Fsm.GetState("Player in car");
+            FsmState exitState = best.Fsm.GetState("Wait for player");
+            if (enterState == null)
+            {
+                enterState = PlayMakerBridge.FindStateByNameContains(best, new[] { "player in", "enter", "drive" });
+            }
+            if (exitState == null)
+            {
+                exitState = PlayMakerBridge.FindStateByNameContains(best, new[] { "wait", "exit", "leave" });
+            }
+
+            if (enterState == null || exitState == null)
+            {
+                return;
+            }
+
+            entry.SeatFsmName = !string.IsNullOrEmpty(best.Fsm.Name) ? best.Fsm.Name : best.FsmName;
+            PlayMakerBridge.PrependAction(enterState, new VehicleSeatAction(this, entry.Id, true));
+            PlayMakerBridge.PrependAction(exitState, new VehicleSeatAction(this, entry.Id, false));
+            if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                DebugLog.Verbose("VehicleSync: seat FSM hooked vehicle=" + entry.DebugPath + " fsm=" + entry.SeatFsmName);
+            }
+        }
+
+        private void NotifySeatEvent(uint vehicleId, bool inSeat)
+        {
+            VehicleEntry entry;
+            if (!_vehicleLookup.TryGetValue(vehicleId, out entry))
+            {
+                return;
+            }
+
+            if (entry.LocalDriverFromFsm == inSeat)
+            {
+                return;
+            }
+
+            entry.LocalDriverFromFsm = inSeat;
+            if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                DebugLog.Verbose("VehicleSync: seat event vehicle=" + entry.DebugPath + " inSeat=" + inSeat);
+            }
+        }
+
+        private static Transform GetSyncTransform(VehicleEntry entry)
+        {
+            if (entry == null)
+            {
+                return null;
+            }
+            if (entry.Body != null)
+            {
+                return entry.Body.transform;
+            }
+            return entry.Transform;
+        }
+
+        private static bool NameContains(string name, string filter)
+        {
+            if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(filter))
+            {
+                return false;
+            }
+            string[] tokens = filter.Split(new[] { ',', '|', ';' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                string token = tokens[i].Trim();
+                if (token.Length == 0)
+                {
+                    continue;
+                }
+                if (name.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private sealed class VehicleEntry
         {
             public uint Id;
@@ -740,6 +968,10 @@ namespace MyWinterCarMpMod.Sync
             public Vector3 LastSentPosition;
             public Quaternion LastSentRotation;
             public uint LastRemoteSequence;
+            public bool LastControlIsLocal;
+            public bool ControlInitialized;
+            public bool LocalDriverFromFsm;
+            public string SeatFsmName;
         }
 
         private sealed class VehicleCandidate
@@ -747,6 +979,29 @@ namespace MyWinterCarMpMod.Sync
             public GameObject Root;
             public string Key;
             public string DebugPath;
+        }
+
+        private sealed class VehicleSeatAction : FsmStateAction
+        {
+            private readonly VehicleSync _owner;
+            private readonly uint _vehicleId;
+            private readonly bool _inSeat;
+
+            public VehicleSeatAction(VehicleSync owner, uint vehicleId, bool inSeat)
+            {
+                _owner = owner;
+                _vehicleId = vehicleId;
+                _inSeat = inSeat;
+            }
+
+            public override void OnEnter()
+            {
+                Finish();
+                if (_owner != null)
+                {
+                    _owner.NotifySeatEvent(_vehicleId, _inSeat);
+                }
+            }
         }
     }
 }

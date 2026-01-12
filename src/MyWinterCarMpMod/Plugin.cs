@@ -14,7 +14,7 @@ using UnityEngine;
 
 namespace MyWinterCarMpMod
 {
-    [BepInPlugin("com.tudor.mywintercarmpmod", "My Winter Car MP Mod", "0.1.0")]
+    [BepInPlugin("com.tudor.mywintercarmpmod", "My Winter Car MP Mod", "0.1.4")]
     public sealed class Plugin : BaseUnityPlugin
     {
         internal static bool AllowMultipleInstances;
@@ -28,6 +28,7 @@ namespace MyWinterCarMpMod
         private DoorSync _doorSync;
         private VehicleSync _vehicleSync;
         private PickupSync _pickupSync;
+        private TimeOfDaySync _timeSync;
         private ITransport _transport;
         private LanDiscovery _lanDiscovery;
         private Vector2 _lanScroll;
@@ -72,6 +73,7 @@ namespace MyWinterCarMpMod
             _doorSync = new DoorSync(_settings);
             _vehicleSync = new VehicleSync(_settings);
             _pickupSync = new PickupSync(_settings);
+            _timeSync = new TimeOfDaySync(_settings);
             _overlayVisible = _settings.OverlayEnabled.Value;
             _buildId = Application.version + "|" + Application.unityVersion;
             _modVersion = Info.Metadata.Version.ToString();
@@ -126,6 +128,18 @@ namespace MyWinterCarMpMod
                 bool allowScan = !IsMainMenuScene();
                 _pickupSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
                 _pickupSync.Update(Time.realtimeSinceStartup);
+            }
+
+            if (_timeSync != null && _levelSync != null)
+            {
+                bool allowScan = !IsMainMenuScene();
+                _timeSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
+            }
+
+            if (_settings.VerboseLogging.Value && _levelSync != null)
+            {
+                bool allowScan = !IsMainMenuScene();
+                PlayMakerScanner.ScanInteractiveFsms(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
             }
 
             if (_settings.Mode.Value == Mode.Host && _hostSession != null)
@@ -243,7 +257,7 @@ namespace MyWinterCarMpMod
             }
             ResetTransport();
             _transport = CreateTransport();
-            _hostSession = new HostSession(_transport, _settings, _levelSync, _doorSync, _vehicleSync, _pickupSync, Logger, _buildId, _modVersion);
+            _hostSession = new HostSession(_transport, _settings, _levelSync, _doorSync, _vehicleSync, _pickupSync, _timeSync, Logger, _buildId, _modVersion);
             _hostSession.Start();
             DebugLog.Info("Host started. Transport=" + _transport.Kind);
             if (_remoteAvatar != null)
@@ -272,7 +286,7 @@ namespace MyWinterCarMpMod
             }
             ResetTransport();
             _transport = CreateTransport();
-            _clientSession = new ClientSession(_transport, _settings, _levelSync, _doorSync, _vehicleSync, _pickupSync, Logger, _buildId, _modVersion);
+            _clientSession = new ClientSession(_transport, _settings, _levelSync, _doorSync, _vehicleSync, _pickupSync, _timeSync, Logger, _buildId, _modVersion);
             _clientSession.Connect();
             DebugLog.Info("Client connect requested. Transport=" + _transport.Kind);
             if (_remoteAvatar != null)
@@ -423,6 +437,7 @@ namespace MyWinterCarMpMod
             state.Warning = _transportWarning;
             state.LevelName = _levelSync != null ? _levelSync.CurrentLevelName : string.Empty;
             state.SendHz = _settings.GetSendHzClamped();
+            state.TimeInfo = BuildTimeInfo();
 
             if (_settings.Mode.Value == Mode.Host)
             {
@@ -476,6 +491,28 @@ namespace MyWinterCarMpMod
             }
 
             return state;
+        }
+
+        private string BuildTimeInfo()
+        {
+            if (_timeSync == null || !_timeSync.Enabled)
+            {
+                return string.Empty;
+            }
+
+            TimeStateData state;
+            bool fromRemote;
+            if (!_timeSync.TryGetLastState(out state, out fromRemote))
+            {
+                return "Time: waiting";
+            }
+
+            Quaternion rot = new Quaternion(state.RotX, state.RotY, state.RotZ, state.RotW);
+            Vector3 dir = rot * Vector3.forward;
+            float elevation = Mathf.Asin(Mathf.Clamp(dir.y, -1f, 1f)) * Mathf.Rad2Deg;
+            string source = fromRemote ? "remote" : "local";
+            return string.Format("Time: sunI={0:0.00} ambI={1:0.00} elev={2:0.0} ({3})",
+                state.SunIntensity, state.AmbientIntensity, elevation, source);
         }
 
         private void UpdateLanDiscovery()

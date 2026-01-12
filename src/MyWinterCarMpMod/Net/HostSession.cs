@@ -21,6 +21,7 @@ namespace MyWinterCarMpMod.Net
         private readonly System.Collections.Generic.List<DoorStateData> _doorSendBuffer = new System.Collections.Generic.List<DoorStateData>(32);
         private readonly System.Collections.Generic.List<DoorHingeStateData> _doorHingeSendBuffer = new System.Collections.Generic.List<DoorHingeStateData>(32);
         private readonly VehicleSync _vehicleSync;
+        private readonly TimeOfDaySync _timeSync;
         private readonly System.Collections.Generic.List<VehicleStateData> _vehicleSendBuffer = new System.Collections.Generic.List<VehicleStateData>(16);
         private readonly PickupSync _pickupSync;
         private readonly System.Collections.Generic.List<PickupStateData> _pickupSendBuffer = new System.Collections.Generic.List<PickupStateData>(32);
@@ -37,12 +38,15 @@ namespace MyWinterCarMpMod.Net
         private float _lastReceiveTime;
         private float _nextPingTime;
         private float _nextLevelSyncTime;
+        private float _nextTimeSyncTime;
+        private float _nextTimeSyncLogTime;
         private string _status = "Host idle.";
         private uint _sessionId;
         private uint _outSequence;
         private uint _lastClientSequence;
         private uint _doorSequence;
         private uint _doorHingeSequence;
+        private uint _timeSequence;
         private uint _vehicleSequence;
         private uint _doorEventSequence;
         private uint _pickupSequence;
@@ -59,7 +63,7 @@ namespace MyWinterCarMpMod.Net
         private float _nextPlayerSendLogTime;
         private float _nextPlayerReceiveLogTime;
 
-        public HostSession(ITransport transport, Settings settings, LevelSync levelSync, DoorSync doorSync, VehicleSync vehicleSync, PickupSync pickupSync, ManualLogSource log, string buildId, string modVersion)
+        public HostSession(ITransport transport, Settings settings, LevelSync levelSync, DoorSync doorSync, VehicleSync vehicleSync, PickupSync pickupSync, TimeOfDaySync timeSync, ManualLogSource log, string buildId, string modVersion)
         {
             _transport = transport;
             _settings = settings;
@@ -67,6 +71,7 @@ namespace MyWinterCarMpMod.Net
             _doorSync = doorSync;
             _vehicleSync = vehicleSync;
             _pickupSync = pickupSync;
+            _timeSync = timeSync;
             _log = log;
             _verbose = settings.VerboseLogging.Value;
             _buildId = buildId ?? string.Empty;
@@ -139,11 +144,13 @@ namespace MyWinterCarMpMod.Net
             _lastReceiveTime = Time.realtimeSinceStartup;
             _nextPingTime = _lastReceiveTime + _settings.GetKeepAliveSeconds();
             _nextLevelSyncTime = _lastReceiveTime + _settings.GetLevelSyncIntervalSeconds();
+            _nextTimeSyncTime = _lastReceiveTime;
             _sessionId = 0;
             _outSequence = 0;
             _lastClientSequence = 0;
             _doorSequence = 0;
             _doorHingeSequence = 0;
+            _timeSequence = 0;
             _vehicleSequence = 0;
             _doorEventSequence = 0;
             _pickupSequence = 0;
@@ -248,6 +255,7 @@ namespace MyWinterCarMpMod.Net
                         SendDoorStates(now);
                         SendDoorHingeStates(now);
                         SendDoorEvents();
+                        SendTimeState(now);
                     }
                     if (_clientSceneReady && _worldStateAcked)
                     {
@@ -553,6 +561,7 @@ namespace MyWinterCarMpMod.Net
             _clientSceneLevelName = string.Empty;
             _doorSequence = 0;
             _doorHingeSequence = 0;
+            _timeSequence = 0;
             _vehicleSequence = 0;
             _doorEventSequence = 0;
             _pickupSequence = 0;
@@ -561,6 +570,7 @@ namespace MyWinterCarMpMod.Net
             _worldStateAttempts = 0;
             _lastReceiveTime = Time.realtimeSinceStartup;
             _nextPingTime = _lastReceiveTime + _settings.GetKeepAliveSeconds();
+            _nextTimeSyncTime = _lastReceiveTime;
 
             byte[] ack = Protocol.BuildHelloAck(_transport.LocalSteamId, hello.ClientNonce, _sessionId, _settings.GetSendHzClamped());
             _transport.SendTo(senderId, ack, true);
@@ -733,6 +743,39 @@ namespace MyWinterCarMpMod.Net
             }
         }
 
+        private void SendTimeState(float now)
+        {
+            if (_timeSync == null || !_timeSync.Enabled)
+            {
+                return;
+            }
+
+            if (now < _nextTimeSyncTime)
+            {
+                return;
+            }
+
+            float interval = 1f / _settings.GetTimeSyncSendHz();
+            _nextTimeSyncTime = now + interval;
+
+            uint nextSequence = _timeSequence + 1;
+            TimeStateData state;
+            if (!_timeSync.TryBuildState(GetUnixTimeMs(), _sessionId, nextSequence, out state))
+            {
+                return;
+            }
+
+            _timeSequence = nextSequence;
+            byte[] payload = Protocol.BuildTimeState(state);
+            _transport.Send(payload, false);
+            if (_verbose && now >= _nextTimeSyncLogTime)
+            {
+                DebugLog.Verbose("TimeSync: sent sunIntensity=" + state.SunIntensity.ToString("F2") +
+                    " ambientIntensity=" + state.AmbientIntensity.ToString("F2"));
+                _nextTimeSyncLogTime = now + 2f;
+            }
+        }
+
         private void SendVehicleStates(float now)
         {
             if (_vehicleSync == null || !_vehicleSync.Enabled)
@@ -892,6 +935,7 @@ namespace MyWinterCarMpMod.Net
             _lastClientSequence = 0;
             _vehicleSequence = 0;
             _doorHingeSequence = 0;
+            _timeSequence = 0;
             _clientSceneReady = false;
             _clientSceneLevelIndex = int.MinValue;
             _clientSceneLevelName = string.Empty;

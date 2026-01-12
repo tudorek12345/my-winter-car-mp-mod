@@ -18,6 +18,7 @@ namespace MyWinterCarMpMod.Net
         private readonly DoorSync _doorSync;
         private readonly VehicleSync _vehicleSync;
         private readonly PickupSync _pickupSync;
+        private readonly TimeOfDaySync _timeSync;
 
         private bool _running;
         private bool _connected;
@@ -60,8 +61,9 @@ namespace MyWinterCarMpMod.Net
         private float _nextPlayerSendLogTime;
         private float _nextPlayerReceiveLogTime;
         private float _nextDoorReceiveLogTime;
+        private float _nextTimeSyncLogTime;
 
-        public ClientSession(ITransport transport, Settings settings, LevelSync levelSync, DoorSync doorSync, VehicleSync vehicleSync, PickupSync pickupSync, ManualLogSource log, string buildId, string modVersion)
+        public ClientSession(ITransport transport, Settings settings, LevelSync levelSync, DoorSync doorSync, VehicleSync vehicleSync, PickupSync pickupSync, TimeOfDaySync timeSync, ManualLogSource log, string buildId, string modVersion)
         {
             _transport = transport;
             _settings = settings;
@@ -69,6 +71,7 @@ namespace MyWinterCarMpMod.Net
             _doorSync = doorSync;
             _vehicleSync = vehicleSync;
             _pickupSync = pickupSync;
+            _timeSync = timeSync;
             _log = log;
             _verbose = settings.VerboseLogging.Value;
             _buildId = buildId ?? string.Empty;
@@ -440,6 +443,18 @@ namespace MyWinterCarMpMod.Net
                             _nextDoorReceiveLogTime = Time.realtimeSinceStartup + 1f;
                         }
                         _doorSync.ApplyRemoteEvent(message.DoorEvent);
+                    }
+                    break;
+                case MessageType.TimeState:
+                    if (_timeSync != null)
+                    {
+                        if (_verbose && Time.realtimeSinceStartup >= _nextTimeSyncLogTime)
+                        {
+                            DebugLog.Verbose("TimeSync: recv sunIntensity=" + message.TimeState.SunIntensity.ToString("F2") +
+                                " ambientIntensity=" + message.TimeState.AmbientIntensity.ToString("F2"));
+                            _nextTimeSyncLogTime = Time.realtimeSinceStartup + 2f;
+                        }
+                        _timeSync.ApplyRemote(message.TimeState);
                     }
                     break;
                 case MessageType.VehicleState:

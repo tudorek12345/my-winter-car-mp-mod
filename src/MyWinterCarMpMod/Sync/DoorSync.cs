@@ -17,8 +17,22 @@ namespace MyWinterCarMpMod.Sync
         private const float LocalHoldSeconds = 0.15f;
         private const float RemoteSuppressSeconds = 0.2f;
         private const float RemoteApplySeconds = 0.35f;
-        private static readonly string[] DoorTokens = new[] { "door", "ovi", "hatch", "boot", "lid", "gate" };
+        private static readonly string[] DoorTokens = new[]
+        {
+            "door", "ovi", "hatch", "boot", "lid", "gate", "fridge", "freezer", "refrigerator", "icebox"
+        };
         private static readonly string[] DoorStateTokens = new[] { "Open", "Close" };
+        private static readonly string[] TapTokens = new[] { "tap", "faucet", "sink" };
+        private static readonly string[] PhoneTokens = new[] { "phone", "telephone" };
+        private static readonly string[] FridgeTokens = new[] { "fridge", "freezer", "refrigerator", "icebox" };
+        private static readonly string[] TapOpenTokens = new[] { "on" };
+        private static readonly string[] TapCloseTokens = new[] { "off" };
+        private static readonly string[] PhoneOpenTokens = new[] { "pick", "answer", "open" };
+        private static readonly string[] PhoneCloseTokens = new[] { "close", "hang", "put", "off" };
+        private static readonly string[] TapEventTokensOn = new[] { "on" };
+        private static readonly string[] TapEventTokensOff = new[] { "off" };
+        private static readonly string[] PhoneEventTokensOpen = new[] { "pick", "answer", "open" };
+        private static readonly string[] PhoneEventTokensClose = new[] { "close", "hang", "off" };
 
         private readonly Settings _settings;
         private readonly List<DoorEntry> _doors = new List<DoorEntry>();
@@ -667,7 +681,8 @@ namespace MyWinterCarMpMod.Sync
                 Hinge = hinge,
                 BaseLocalRotation = doorTransform.localRotation,
                 LastSentRotation = doorTransform.localRotation,
-                LastAppliedRotation = doorTransform.localRotation
+                LastAppliedRotation = doorTransform.localRotation,
+                InteractionKind = DetectInteractionKind(doorTransform.name, debugPath)
             };
 
             entry.IsVehicleDoor = IsVehicleDoor(doorTransform, hinge);
@@ -709,6 +724,19 @@ namespace MyWinterCarMpMod.Sync
             entry.HingeAxis = hinge.axis;
             entry.LastSentHingeAngle = hinge.angle;
             entry.LastAppliedHingeAngle = hinge.angle;
+
+            if (entry.HingeUseLimits && Mathf.Abs(entry.HingeMax - entry.HingeMin) < 0.05f)
+            {
+                entry.HingeUseLimits = false;
+                hinge.useLimits = false;
+                if (_settings != null && _settings.VerboseLogging.Value)
+                {
+                    DebugLog.Verbose("DoorSync: hinge limits collapsed for id=" + entry.Id +
+                        " min=" + entry.HingeMin.ToString("F1") +
+                        " max=" + entry.HingeMax.ToString("F1") +
+                        " (ignoring limits).");
+                }
+            }
 
             if (_settings != null && _settings.VerboseLogging.Value)
             {
@@ -774,7 +802,8 @@ namespace MyWinterCarMpMod.Sync
                 Hinge = null,
                 BaseLocalRotation = doorTransform.localRotation,
                 LastSentRotation = doorTransform.localRotation,
-                LastAppliedRotation = doorTransform.localRotation
+                LastAppliedRotation = doorTransform.localRotation,
+                InteractionKind = DetectInteractionKind(doorTransform.name, debugPath)
             };
 
             bool playMaker = AttachPlayMaker(fsm, entry, doorTransform.name);
@@ -933,7 +962,11 @@ namespace MyWinterCarMpMod.Sync
 
                 if (useFilter && !NameMatches(hinge.transform, filter))
                 {
-                    continue;
+                    if (!ContainsAnyToken(hinge.transform.name, FridgeTokens) &&
+                        !ContainsAnyTokenInParents(hinge.transform, FridgeTokens, 3))
+                    {
+                        continue;
+                    }
                 }
 
                 string key = BuildDoorKey(hinge);
@@ -972,14 +1005,18 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
+                string debugPath = BuildDebugPath(doorTransform);
                 if (useFilter && !NameMatches(doorTransform, filter))
                 {
-                    continue;
+                    InteractionKind kind = DetectInteractionKind(doorTransform.name, debugPath);
+                    if (kind == InteractionKind.Door)
+                    {
+                        continue;
+                    }
                 }
 
                 seen.Add(doorTransform);
-                string key = BuildPlayMakerDoorKey(doorTransform);
-                string debugPath = BuildDebugPath(doorTransform);
+                string key = debugPath + "|pm";
                 candidates.Add(new DoorCandidate { Hinge = null, DoorTransform = doorTransform, Fsm = fsm, Key = key, DebugPath = debugPath });
             }
 
@@ -999,36 +1036,72 @@ namespace MyWinterCarMpMod.Sync
                 fsmName = fsm.Fsm.Name;
             }
 
-            bool hasSignals = PlayMakerBridge.HasAnyEvent(fsm, new[] { "OPEN", "CLOSE", "OPENDOOR", "CLOSEDOOR" }) ||
+            bool hasDoorSignals = PlayMakerBridge.HasAnyEvent(fsm, new[] { "OPEN", "CLOSE", "OPENDOOR", "CLOSEDOOR" }) ||
                 PlayMakerBridge.FindStateByNameContains(fsm, DoorStateTokens) != null;
-            if (!hasSignals)
-            {
-                return false;
-            }
+            bool hasTapSignals = PlayMakerBridge.HasAnyEvent(fsm, new[] { "ON", "OFF" }) ||
+                (PlayMakerBridge.FindStateByNameContains(fsm, TapOpenTokens) != null &&
+                 PlayMakerBridge.FindStateByNameContains(fsm, TapCloseTokens) != null);
+            bool hasPhoneSignals = PlayMakerBridge.FindStateByNameContains(fsm, PhoneOpenTokens) != null &&
+                PlayMakerBridge.FindStateByNameContains(fsm, PhoneCloseTokens) != null;
 
-            if (string.Equals(fsmName, "Use", StringComparison.OrdinalIgnoreCase))
+            bool isDoorName = string.Equals(fsmName, "Use", StringComparison.OrdinalIgnoreCase) ||
+                ContainsAnyToken(fsmName, DoorTokens) ||
+                ContainsAnyToken(fsm.gameObject.name, DoorTokens) ||
+                ContainsAnyTokenInParents(fsm.transform, DoorTokens, 4);
+
+            bool isTapName = ContainsAnyToken(fsmName, TapTokens) ||
+                ContainsAnyToken(fsm.gameObject.name, TapTokens) ||
+                ContainsAnyTokenInParents(fsm.transform, TapTokens, 4);
+
+            bool isPhoneName = ContainsAnyToken(fsmName, PhoneTokens) ||
+                ContainsAnyToken(fsm.gameObject.name, PhoneTokens) ||
+                ContainsAnyTokenInParents(fsm.transform, PhoneTokens, 4);
+
+            if (hasDoorSignals && isDoorName)
             {
                 return true;
             }
 
-            if (ContainsAnyToken(fsmName, DoorTokens) || ContainsAnyToken(fsm.gameObject.name, DoorTokens))
+            if (hasTapSignals && isTapName)
             {
                 return true;
             }
 
-            Transform current = fsm.transform;
+            if (hasPhoneSignals && isPhoneName)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool ContainsAnyTokenInParents(Transform transform, string[] tokens, int depthLimit)
+        {
+            Transform current = transform;
             int depth = 0;
-            while (current != null && depth < 4)
+            while (current != null && depth < depthLimit)
             {
-                if (LooksLikeDoorRoot(current.name))
+                if (ContainsAnyToken(current.name, tokens))
                 {
                     return true;
                 }
                 current = current.parent;
                 depth++;
             }
-
             return false;
+        }
+
+        private static InteractionKind DetectInteractionKind(string name, string debugPath)
+        {
+            if (ContainsAnyToken(name, TapTokens) || ContainsAnyToken(debugPath, TapTokens))
+            {
+                return InteractionKind.Tap;
+            }
+            if (ContainsAnyToken(name, PhoneTokens) || ContainsAnyToken(debugPath, PhoneTokens))
+            {
+                return InteractionKind.Phone;
+            }
+            return InteractionKind.Door;
         }
 
         private static bool NameContains(string name, string filter)
@@ -1095,11 +1168,60 @@ namespace MyWinterCarMpMod.Sync
                 return true;
             }
 
-            FsmState openState = fsm.Fsm.GetState("Open door") ?? PlayMakerBridge.FindStateByNameContains(fsm, DoorStateTokens);
-            FsmState closeState = fsm.Fsm.GetState("Close door") ?? PlayMakerBridge.FindStateByNameContains(fsm, DoorStateTokens);
+            InteractionKind kind = entry.InteractionKind;
+            if (kind == InteractionKind.Door)
+            {
+                kind = DetectInteractionKind(doorName, entry.DebugPath);
+                entry.InteractionKind = kind;
+            }
+
+            string[] openTokens = DoorStateTokens;
+            string[] closeTokens = DoorStateTokens;
+            string[] openEventTokens = new[] { "open" };
+            string[] closeEventTokens = new[] { "close" };
+            bool allowAnyEvent = false;
+
+            if (kind == InteractionKind.Tap)
+            {
+                openTokens = TapOpenTokens;
+                closeTokens = TapCloseTokens;
+                openEventTokens = TapEventTokensOn;
+                closeEventTokens = TapEventTokensOff;
+                allowAnyEvent = true;
+            }
+            else if (kind == InteractionKind.Phone)
+            {
+                openTokens = PhoneOpenTokens;
+                closeTokens = PhoneCloseTokens;
+                openEventTokens = PhoneEventTokensOpen;
+                closeEventTokens = PhoneEventTokensClose;
+                allowAnyEvent = true;
+            }
+            else if (entry.IsVehicleDoor)
+            {
+                allowAnyEvent = true;
+            }
+
+            FsmState openState = null;
+            FsmState closeState = null;
+            if (kind == InteractionKind.Door)
+            {
+                openState = fsm.Fsm.GetState("Open door") ?? PlayMakerBridge.FindStateByNameContains(fsm, DoorStateTokens);
+                closeState = fsm.Fsm.GetState("Close door") ?? PlayMakerBridge.FindStateByNameContains(fsm, DoorStateTokens);
+            }
+            if (kind == InteractionKind.Tap)
+            {
+                openState = FindStateByNameExact(fsm, new[] { "ON" }) ?? openState;
+                closeState = FindStateByNameExact(fsm, new[] { "OFF" }) ?? closeState;
+            }
             if (openState == null || closeState == null)
             {
-                DebugLog.Verbose("DoorSync: PlayMaker states missing for door " + (doorName ?? "<null>"));
+                openState = openState ?? PlayMakerBridge.FindStateByNameContains(fsm, openTokens);
+                closeState = closeState ?? PlayMakerBridge.FindStateByNameContains(fsm, closeTokens);
+            }
+            if (openState == null || closeState == null)
+            {
+                DebugLog.Verbose("DoorSync: PlayMaker states missing for " + kind + " " + (doorName ?? "<null>"));
                 return false;
             }
 
@@ -1113,10 +1235,10 @@ namespace MyWinterCarMpMod.Sync
                 PlayMakerBridge.AddGlobalTransition(fsm, mpOpen, openState.Name);
                 PlayMakerBridge.AddGlobalTransition(fsm, mpClose, closeState.Name);
 
-                string openEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorOpenEventName(), new[] { "open" });
-                string closeEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorCloseEventName(), new[] { "close" });
-                string expectedOpenEvent = fsm.Fsm.HasEvent(openEventName) ? openEventName : null;
-                string expectedCloseEvent = fsm.Fsm.HasEvent(closeEventName) ? closeEventName : null;
+                string openEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorOpenEventName(), openEventTokens);
+                string closeEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorCloseEventName(), closeEventTokens);
+                string expectedOpenEvent = allowAnyEvent ? null : (fsm.Fsm.HasEvent(openEventName) ? openEventName : null);
+                string expectedCloseEvent = allowAnyEvent ? null : (fsm.Fsm.HasEvent(closeEventName) ? closeEventName : null);
                 PlayMakerBridge.PrependAction(openState, new DoorPlayMakerAction(this, entry.Id, true, expectedOpenEvent));
                 PlayMakerBridge.PrependAction(closeState, new DoorPlayMakerAction(this, entry.Id, false, expectedCloseEvent));
             }
@@ -1125,9 +1247,10 @@ namespace MyWinterCarMpMod.Sync
             entry.HasPlayMaker = true;
             entry.MpOpenEventName = mpOpenEvent;
             entry.MpCloseEventName = mpCloseEvent;
-            entry.OpenEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorOpenEventName(), new[] { "open" });
-            entry.CloseEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorCloseEventName(), new[] { "close" });
-            entry.DoorOpenBool = PlayMakerBridge.FindBool(fsm, "DoorOpen") ?? PlayMakerBridge.FindBoolByTokens(fsm, new[] { "dooropen", "isopen" });
+            entry.OpenEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorOpenEventName(), openEventTokens);
+            entry.CloseEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorCloseEventName(), closeEventTokens);
+            entry.DoorOpenBool = PlayMakerBridge.FindBool(fsm, "DoorOpen") ??
+                PlayMakerBridge.FindBoolByTokens(fsm, new[] { "dooropen", "isopen", "open", "on" });
             if (entry.DoorOpenBool != null)
             {
                 entry.LastDoorOpen = entry.DoorOpenBool.Value;
@@ -1136,7 +1259,10 @@ namespace MyWinterCarMpMod.Sync
             {
                 entry.SkipRotationSync = true;
             }
-            DebugLog.Verbose("DoorSync: PlayMaker hook attached to " + (doorName ?? "<null>") + " open=" + entry.OpenEventName + " close=" + entry.CloseEventName);
+            DebugLog.Verbose("DoorSync: PlayMaker hook attached to " + (doorName ?? "<null>") +
+                " kind=" + entry.InteractionKind +
+                " open=" + entry.OpenEventName +
+                " close=" + entry.CloseEventName);
             return true;
         }
 
@@ -1170,6 +1296,37 @@ namespace MyWinterCarMpMod.Sync
             }
 
             return fallback;
+        }
+
+        private static FsmState FindStateByNameExact(PlayMakerFSM fsm, string[] names)
+        {
+            if (fsm == null || fsm.Fsm == null || names == null || names.Length == 0)
+            {
+                return null;
+            }
+
+            FsmState[] states = fsm.Fsm.States;
+            if (states == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < states.Length; i++)
+            {
+                FsmState state = states[i];
+                if (state == null || string.IsNullOrEmpty(state.Name))
+                {
+                    continue;
+                }
+                for (int n = 0; n < names.Length; n++)
+                {
+                    if (string.Equals(state.Name, names[n], StringComparison.OrdinalIgnoreCase))
+                    {
+                        return state;
+                    }
+                }
+            }
+            return null;
         }
 
         private void EnqueueDoorEvent(DoorEntry entry, bool open)
@@ -1472,6 +1629,13 @@ namespace MyWinterCarMpMod.Sync
             return seq > last;
         }
 
+        private enum InteractionKind
+        {
+            Door = 0,
+            Tap = 1,
+            Phone = 2
+        }
+
         private sealed class DoorEntry
         {
             public uint Id;
@@ -1503,6 +1667,7 @@ namespace MyWinterCarMpMod.Sync
             public bool HasPlayMaker;
             public bool IsVehicleDoor;
             public bool SkipRotationSync;
+            public InteractionKind InteractionKind;
             public string MpOpenEventName;
             public string MpCloseEventName;
             public string OpenEventName;
