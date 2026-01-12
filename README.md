@@ -1,4 +1,5 @@
-# My Winter Car MP Mod
+# My Winter Car MP Mod 
+<img width="858" height="858" alt="mwc_logo_circle_transparent_large_trans" src="https://github.com/user-attachments/assets/d6e00873-dcd0-45fa-bb9c-e11620fa22c7" />
 
 
 ## Current Status
