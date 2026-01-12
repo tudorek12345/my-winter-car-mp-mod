@@ -1,4 +1,4 @@
-# My Winter Car MP Mod (WIP)
+# My Winter Car MP Mod
 
 
 ## Current Status
