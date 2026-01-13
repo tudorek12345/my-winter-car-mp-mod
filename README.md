@@ -1,4 +1,5 @@
-# My Winter Car MP Mod (WIP)
+# My Winter Car MP Mod 
+<img width="858" height="858" alt="mwc_logo_circle_transparent_large_trans" src="https://github.com/user-attachments/assets/d6e00873-dcd0-45fa-bb9c-e11620fa22c7" />
 
 
 ## Current Status
@@ -7,26 +8,15 @@ Host and client can connect in-game and both see the remote capsule rig. Interio
 OFFICIAL DISCORD
 https://discord.gg/GQeC5tCH2w
 
+## Current Version [STATUS]
+0.1.4 - 2026-01-12
+Added vehicle hinge door updates (protocol v7) and spring-based remote apply to avoid car jumps.
+Updated vehicle door rotation policy with clearer logging and safe fallback for non-physics doors.
+Expanded DoorSync name filter defaults to include sink/tap hinges.
+Added avatar AssetBundle config (BundlePath, AssetName, Scale, YOffset).
+Added PlayMaker FSM scanner for sink/phone diagnostics (verbose logging only).
+Added TimeOfDay sync (also logs time for both client and host in overlay)
 
-## Current Features
-- Two-player host/client.
-- Steam P2P or TCP LAN (LAN discovery + in-game join panel).
-- Main menu co-op panel + on-screen overlay.
-- Session handshake, keepalive pings, timeouts, auto-reconnect.
-- Door sync via PlayMaker events + hinge joints (room + cabin doors).
-- Vehicle door hinge sync (experimental, avoids direct rotation).
-- Pickup sync (experimental) for cabin items when enabled.
-- Remote avatar rendered as primitives, with optional AssetBundle swap.
-- Per-instance debug logs for easier troubleshooting.
-- Per-instance config overrides (`--mwc-config` or `MWC_MPM_CONFIG`).
-
-## Known Limitations
-- No full world/AI/time-of-day sync yet; VehicleSync is experimental and off by default.
-- Remote player is visual-only (no collisions); avatar mesh swap is cosmetic only.
-- Vehicle doors are still WIP and may not sync or may jitter.
-- Non-door interactables (sink/phone/etc.) need PickupSync or upcoming FSM hooks.
-- Level sync is still being stabilized; clients may need retries.
-- LAN/Steam P2P is still experimental and may require retries.
 
 ## Requirements
 - My Winter Car (Windows).
