@@ -596,6 +596,13 @@ namespace MyWinterCarMpMod.Net
             OwnershipUpdateData update = default(OwnershipUpdateData);
             bool handled = false;
 
+            if (_verbose)
+            {
+                DebugLog.Verbose("Ownership request recv. Kind=" + request.Kind +
+                    " Id=" + request.ObjectId +
+                    " Action=" + request.Action);
+            }
+
             if (request.Kind == SyncObjectKind.Vehicle && _vehicleSync != null)
             {
                 handled = _vehicleSync.TryHandleOwnershipRequest(request, out update);
@@ -708,7 +715,7 @@ namespace MyWinterCarMpMod.Net
             }
 
             long unixTimeMs = GetUnixTimeMs();
-            int count = _doorSync.CollectHingeChanges(unixTimeMs, now, _doorHingeSendBuffer);
+            int count = _doorSync.CollectHingeChanges(unixTimeMs, now, _doorHingeSendBuffer, OwnerKind.Host, true);
             for (int i = 0; i < count; i++)
             {
                 DoorHingeStateData state = _doorHingeSendBuffer[i];

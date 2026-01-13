@@ -72,6 +72,7 @@ namespace MyWinterCarMpMod
             _remoteAvatar = new RemotePlayerAvatar(_settings);
             _doorSync = new DoorSync(_settings);
             _vehicleSync = new VehicleSync(_settings);
+            _doorSync.SetVehicleSync(_vehicleSync);
             _pickupSync = new PickupSync(_settings);
             _timeSync = new TimeOfDaySync(_settings);
             _overlayVisible = _settings.OverlayEnabled.Value;
@@ -140,6 +141,7 @@ namespace MyWinterCarMpMod
             {
                 bool allowScan = !IsMainMenuScene();
                 PlayMakerScanner.ScanInteractiveFsms(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
+                PlayMakerScanner.ScanVehicleDoorFsms(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan, "sorbet");
             }
 
             if (_settings.Mode.Value == Mode.Host && _hostSession != null)

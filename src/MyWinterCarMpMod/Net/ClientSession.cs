@@ -62,6 +62,7 @@ namespace MyWinterCarMpMod.Net
         private float _nextPlayerReceiveLogTime;
         private float _nextDoorReceiveLogTime;
         private float _nextTimeSyncLogTime;
+        private float _nextOwnershipLogTime;
 
         public ClientSession(ITransport transport, Settings settings, LevelSync levelSync, DoorSync doorSync, VehicleSync vehicleSync, PickupSync pickupSync, TimeOfDaySync timeSync, ManualLogSource log, string buildId, string modVersion)
         {
@@ -571,7 +572,7 @@ namespace MyWinterCarMpMod.Net
             }
 
             long unixTimeMs = GetUnixTimeMs();
-            int count = _doorSync.CollectHingeChanges(unixTimeMs, now, _doorHingeSendBuffer);
+            int count = _doorSync.CollectHingeChanges(unixTimeMs, now, _doorHingeSendBuffer, OwnerKind.Client, false);
             for (int i = 0; i < count; i++)
             {
                 DoorHingeStateData state = _doorHingeSendBuffer[i];
@@ -684,6 +685,7 @@ namespace MyWinterCarMpMod.Net
 
         private void SendOwnershipRequests()
         {
+            float now = Time.realtimeSinceStartup;
             if (_vehicleSync != null && _settings.VehicleOwnershipEnabled.Value)
             {
                 int count = _vehicleSync.CollectOwnershipRequests(OwnerKind.Client, _ownershipRequestBuffer);
@@ -699,6 +701,14 @@ namespace MyWinterCarMpMod.Net
                     else
                     {
                         _transport.Send(payload, _settings.ReliableForControl.Value);
+                    }
+
+                    if (_verbose && now >= _nextOwnershipLogTime)
+                    {
+                        DebugLog.Verbose("Ownership request sent. Kind=" + request.Kind +
+                            " Id=" + request.ObjectId +
+                            " Action=" + request.Action);
+                        _nextOwnershipLogTime = now + 0.5f;
                     }
                 }
             }
@@ -718,6 +728,14 @@ namespace MyWinterCarMpMod.Net
                     else
                     {
                         _transport.Send(payload, _settings.ReliableForControl.Value);
+                    }
+
+                    if (_verbose && now >= _nextOwnershipLogTime)
+                    {
+                        DebugLog.Verbose("Ownership request sent. Kind=" + request.Kind +
+                            " Id=" + request.ObjectId +
+                            " Action=" + request.Action);
+                        _nextOwnershipLogTime = now + 0.5f;
                     }
                 }
             }

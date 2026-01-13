@@ -35,6 +35,7 @@ namespace MyWinterCarMpMod.Sync
         private static readonly string[] PhoneEventTokensClose = new[] { "close", "hang", "off" };
 
         private readonly Settings _settings;
+        private VehicleSync _vehicleSync;
         private readonly List<DoorEntry> _doors = new List<DoorEntry>();
         private readonly Dictionary<uint, DoorEntry> _doorLookup = new Dictionary<uint, DoorEntry>();
         private readonly List<DoorEventData> _doorEventQueue = new List<DoorEventData>(16);
@@ -47,9 +48,8 @@ namespace MyWinterCarMpMod.Sync
         private float _nextEventLogTime;
         private float _nextHingeSendLogTime;
         private float _nextHingeApplyLogTime;
-        private bool _loggedNoDoors;
-        private bool _loggedMissingDoorEvent;
         private bool _dumpedDoors;
+        private readonly HashSet<uint> _missingDoorIds = new HashSet<uint>();
         private bool _pendingRescan;
         private float _nextRescanTime;
         private string _rescanReason = string.Empty;
@@ -57,6 +57,11 @@ namespace MyWinterCarMpMod.Sync
         public DoorSync(Settings settings)
         {
             _settings = settings;
+        }
+
+        public void SetVehicleSync(VehicleSync vehicleSync)
+        {
+            _vehicleSync = vehicleSync;
         }
 
         public bool Enabled
@@ -168,7 +173,7 @@ namespace MyWinterCarMpMod.Sync
             return buffer.Count;
         }
 
-        public int CollectHingeChanges(long unixTimeMs, float now, List<DoorHingeStateData> buffer)
+        public int CollectHingeChanges(long unixTimeMs, float now, List<DoorHingeStateData> buffer, OwnerKind localOwner, bool includeUnowned)
         {
             buffer.Clear();
             if (!Enabled || _doors.Count == 0)
@@ -193,12 +198,22 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
+                if (entry.SkipHingeSync)
+                {
+                    continue;
+                }
+
+                if (!IsLocalVehicleAuthority(entry, localOwner, includeUnowned))
+                {
+                    continue;
+                }
+
                 if (now < entry.SuppressHingeUntilTime)
                 {
                     continue;
                 }
 
-                float angle = entry.Hinge.angle;
+                float angle = NormalizeAngle(entry.Hinge.angle);
                 if (Mathf.Abs(Mathf.DeltaAngle(entry.LastSentHingeAngle, angle)) < angleThreshold)
                 {
                     continue;
@@ -266,6 +281,11 @@ namespace MyWinterCarMpMod.Sync
 
                 if (entry.DoorOpenBool != null && now >= entry.SuppressPlayMakerUntilTime)
                 {
+                    if (entry.IsVehicleDoor && entry.AllowVehiclePlayMaker)
+                    {
+                        continue;
+                    }
+
                     bool open = entry.DoorOpenBool.Value;
                     if (open != entry.LastDoorOpen)
                     {
@@ -286,13 +306,7 @@ namespace MyWinterCarMpMod.Sync
             DoorEntry entry;
             if (!_doorLookup.TryGetValue(state.DoorId, out entry))
             {
-                if (!_loggedNoDoors)
-                {
-                    DebugLog.Warn("DoorSync missing door id " + state.DoorId + ". Re-scan on next scene change.");
-                    _loggedNoDoors = true;
-                    DumpDoorsOnce("missing door id " + state.DoorId);
-                }
-                RequestRescan("missing door id " + state.DoorId);
+                RegisterMissingDoorId(state.DoorId, "missing door id");
                 return;
             }
 
@@ -335,6 +349,10 @@ namespace MyWinterCarMpMod.Sync
             entry.LastSentRotation = target;
             entry.SuppressUntilTime = now + RemoteSuppressSeconds;
             entry.RemoteApplyUntilTime = now + RemoteApplySeconds;
+            if (entry.IsVehicleDoor && entry.SkipHingeSync)
+            {
+                EnsureRemoteDoorKinematic(entry);
+            }
             ApplyRotation(entry, target);
 
             if (now >= _nextApplyLogTime)
@@ -355,19 +373,18 @@ namespace MyWinterCarMpMod.Sync
             DoorEntry entry;
             if (!_doorLookup.TryGetValue(state.DoorId, out entry))
             {
-                if (!_loggedNoDoors)
-                {
-                    DebugLog.Warn("DoorSync missing hinge door id " + state.DoorId + ". Re-scan on next scene change.");
-                    _loggedNoDoors = true;
-                    DumpDoorsOnce("missing hinge door id " + state.DoorId);
-                }
-                RequestRescan("missing hinge door id " + state.DoorId);
+                RegisterMissingDoorId(state.DoorId, "missing hinge door id");
                 return;
             }
 
             if (entry.Hinge == null)
             {
                 RequestRescan("missing hinge for door id " + state.DoorId);
+                return;
+            }
+
+            if (entry.SkipHingeSync)
+            {
                 return;
             }
 
@@ -382,8 +399,21 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
-            float targetAngle = state.Angle;
-            if (entry.HingeUseLimits)
+            float targetAngle = NormalizeAngle(state.Angle);
+            if (entry.IsVehicleDoor)
+            {
+                EnsureRemoteDoorDynamic(entry);
+            }
+            bool useLimits = entry.HingeUseLimits;
+            if (entry.IsVehicleDoor && useLimits && Mathf.Abs(entry.HingeMax - entry.HingeMin) < 0.05f)
+            {
+                useLimits = false;
+                if (entry.Hinge.useLimits)
+                {
+                    entry.Hinge.useLimits = false;
+                }
+            }
+            if (useLimits)
             {
                 targetAngle = Mathf.Clamp(targetAngle, entry.HingeMin, entry.HingeMax);
             }
@@ -421,13 +451,7 @@ namespace MyWinterCarMpMod.Sync
             DoorEntry entry;
             if (!_doorLookup.TryGetValue(state.DoorId, out entry))
             {
-                if (!_loggedMissingDoorEvent)
-                {
-                    DebugLog.Warn("DoorSync missing door id for event " + state.DoorId + ". Re-scan on next scene change.");
-                    _loggedMissingDoorEvent = true;
-                    DumpDoorsOnce("missing door event id " + state.DoorId);
-                }
-                RequestRescan("missing door event id " + state.DoorId);
+                RegisterMissingDoorId(state.DoorId, "missing door event id");
                 return;
             }
 
@@ -447,11 +471,29 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
+            if (entry.IsVehicleDoor)
+            {
+                // Vehicle doors are hinge-synced by default; only allow PlayMaker for explicit vehicle mapping.
+                if (!entry.AllowVehiclePlayMaker)
+                {
+                    return;
+                }
+            }
+
             float now = Time.realtimeSinceStartup;
             entry.SuppressPlayMakerUntilTime = now + RemoteSuppressSeconds;
             entry.LastDoorOpen = state.Open != 0;
 
             string eventName = state.Open != 0 ? entry.MpOpenEventName : entry.MpCloseEventName;
+            if (entry.AllowVehiclePlayMaker && entry.IsVehicleDoor)
+            {
+                string nativeEvent = state.Open != 0 ? entry.OpenEventName : entry.CloseEventName;
+                if (!string.IsNullOrEmpty(nativeEvent) && entry.Fsm.Fsm != null && entry.Fsm.Fsm.HasEvent(nativeEvent))
+                {
+                    eventName = nativeEvent;
+                }
+            }
+
             if (!string.IsNullOrEmpty(eventName))
             {
                 entry.Fsm.SendEvent(eventName);
@@ -460,6 +502,7 @@ namespace MyWinterCarMpMod.Sync
                     DebugLog.Verbose("DoorSync: remote door event id=" + entry.Id +
                         " open=" + (state.Open != 0) +
                         " fsm=" + entry.Fsm.FsmName +
+                        " event=" + eventName +
                         " path=" + entry.DebugPath);
                     _nextEventLogTime = now + 1f;
                 }
@@ -515,7 +558,12 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
-                float angle = entry.Hinge.angle;
+                if (entry.SkipHingeSync)
+                {
+                    continue;
+                }
+
+                float angle = NormalizeAngle(entry.Hinge.angle);
                 states.Add(new DoorHingeStateData
                 {
                     SessionId = sessionId,
@@ -534,8 +582,7 @@ namespace MyWinterCarMpMod.Sync
             _doors.Clear();
             _doorLookup.Clear();
             _doorEventQueue.Clear();
-            _loggedNoDoors = false;
-            _loggedMissingDoorEvent = false;
+            _missingDoorIds.Clear();
             _dumpedDoors = false;
             _nextRotationSampleTime = 0f;
             _nextHingeSampleTime = 0f;
@@ -691,7 +738,33 @@ namespace MyWinterCarMpMod.Sync
                 ConfigureVehicleHinge(entry);
             }
 
-            bool playMaker = AttachPlayMaker(doorTransform, entry);
+            bool playMaker = false;
+            if (!entry.IsVehicleDoor)
+            {
+                playMaker = AttachPlayMaker(doorTransform, entry);
+            }
+            else if (IsSorbetDoor(debugPath, doorTransform))
+            {
+                PlayMakerFSM fsm = FindVehicleDoorFsm(doorTransform);
+                if (fsm == null)
+                {
+                    DebugLog.Verbose("DoorSync: Sorbet door FSM not found for " + doorTransform.name);
+                }
+                else
+                {
+                    playMaker = AttachPlayMaker(fsm, entry, doorTransform.name);
+                    if (playMaker)
+                    {
+                        entry.AllowVehiclePlayMaker = true;
+                        entry.SkipHingeSync = true;
+                        DebugLog.Verbose("DoorSync: Sorbet door PlayMaker enabled id=" + entry.Id + " path=" + entry.DebugPath);
+                    }
+                }
+            }
+            else if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                DebugLog.Verbose("DoorSync: skipping PlayMaker for vehicle door " + doorTransform.name);
+            }
             entry.HasPlayMaker = playMaker;
             UpdateRotationSyncPolicy(entry);
 
@@ -709,6 +782,87 @@ namespace MyWinterCarMpMod.Sync
             return true;
         }
 
+        private bool IsLocalVehicleAuthority(DoorEntry entry, OwnerKind localOwner, bool includeUnowned)
+        {
+            if (entry == null || !entry.IsVehicleDoor)
+            {
+                return true;
+            }
+
+            if (_vehicleSync == null)
+            {
+                return localOwner == OwnerKind.Host && includeUnowned;
+            }
+
+            Transform transform = entry.Hinge != null ? entry.Hinge.transform : entry.Transform;
+            return _vehicleSync.IsLocalAuthorityForTransform(transform, localOwner, includeUnowned);
+        }
+
+        private static bool IsSorbetDoor(string debugPath, Transform doorTransform)
+        {
+            if (!string.IsNullOrEmpty(debugPath) &&
+                debugPath.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            if (doorTransform != null && doorTransform.root != null)
+            {
+                string rootName = doorTransform.root.name;
+                if (!string.IsNullOrEmpty(rootName) &&
+                    rootName.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static PlayMakerFSM FindVehicleDoorFsm(Transform doorTransform)
+        {
+            if (doorTransform == null)
+            {
+                return null;
+            }
+
+            PlayMakerFSM[] fsms = doorTransform.GetComponentsInChildren<PlayMakerFSM>(true);
+            if (fsms == null || fsms.Length == 0)
+            {
+                return null;
+            }
+
+            PlayMakerFSM fallback = null;
+            for (int i = 0; i < fsms.Length; i++)
+            {
+                PlayMakerFSM fsm = fsms[i];
+                if (fsm == null || fsm.Fsm == null)
+                {
+                    continue;
+                }
+
+                string fsmName = !string.IsNullOrEmpty(fsm.Fsm.Name) ? fsm.Fsm.Name : fsm.FsmName;
+                if (!string.Equals(fsmName, "Use", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string path = BuildDebugPath(fsm.transform);
+                if (path.IndexOf("handle", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    path.IndexOf("hatch", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return fsm;
+                }
+
+                if (fallback == null)
+                {
+                    fallback = fsm;
+                }
+            }
+
+            return fallback;
+        }
+
         private void ConfigureVehicleHinge(DoorEntry entry)
         {
             if (entry == null || entry.Hinge == null)
@@ -722,28 +876,35 @@ namespace MyWinterCarMpMod.Sync
             entry.HingeMin = limits.min;
             entry.HingeMax = limits.max;
             entry.HingeAxis = hinge.axis;
-            entry.LastSentHingeAngle = hinge.angle;
-            entry.LastAppliedHingeAngle = hinge.angle;
+            float angle = NormalizeAngle(hinge.angle);
+            entry.LastSentHingeAngle = angle;
+            entry.LastAppliedHingeAngle = angle;
 
-            if (entry.HingeUseLimits && Mathf.Abs(entry.HingeMax - entry.HingeMin) < 0.05f)
+            bool collapsedLimits = entry.HingeUseLimits && Mathf.Abs(entry.HingeMax - entry.HingeMin) < 0.05f;
+            if (collapsedLimits && _settings != null && _settings.VerboseLogging.Value)
             {
-                entry.HingeUseLimits = false;
-                hinge.useLimits = false;
-                if (_settings != null && _settings.VerboseLogging.Value)
-                {
-                    DebugLog.Verbose("DoorSync: hinge limits collapsed for id=" + entry.Id +
-                        " min=" + entry.HingeMin.ToString("F1") +
-                        " max=" + entry.HingeMax.ToString("F1") +
-                        " (ignoring limits).");
-                }
+                DebugLog.Verbose("DoorSync: hinge limits collapsed for id=" + entry.Id +
+                    " min=" + entry.HingeMin.ToString("F1") +
+                    " max=" + entry.HingeMax.ToString("F1") +
+                    " (keeping limits).");
             }
 
             if (_settings != null && _settings.VerboseLogging.Value)
             {
+                JointMotor motor = hinge.motor;
+                JointSpring spring = hinge.spring;
+                string motorInfo = hinge.useMotor
+                    ? (" motor=on vel=" + motor.targetVelocity.ToString("F1") + " force=" + motor.force.ToString("F1"))
+                    : " motor=off";
+                string springInfo = hinge.useSpring
+                    ? (" spring=on k=" + spring.spring.ToString("F1") + " d=" + spring.damper.ToString("F1") + " target=" + spring.targetPosition.ToString("F1"))
+                    : " spring=off";
                 DebugLog.Verbose("DoorSync: vehicle hinge door id=" + entry.Id +
                     " axis=" + FormatVec3(entry.HingeAxis) +
                     " limits=" + entry.HingeMin.ToString("F1") + "," + entry.HingeMax.ToString("F1") +
                     " useLimits=" + entry.HingeUseLimits +
+                    motorInfo +
+                    springInfo +
                     " path=" + entry.DebugPath);
             }
         }
@@ -758,6 +919,11 @@ namespace MyWinterCarMpMod.Sync
             DoorEntry existing = FindDoorByPath(debugPath);
             if (existing != null)
             {
+                if (existing.IsVehicleDoor)
+                {
+                    return false;
+                }
+
                 bool attached = fsm != null
                     ? AttachPlayMaker(fsm, existing, doorTransform.name)
                     : AttachPlayMaker(doorTransform, existing);
@@ -806,6 +972,16 @@ namespace MyWinterCarMpMod.Sync
                 InteractionKind = DetectInteractionKind(doorTransform.name, debugPath)
             };
 
+            entry.IsVehicleDoor = IsVehicleDoor(doorTransform, null);
+            if (entry.IsVehicleDoor)
+            {
+                if (_settings != null && _settings.VerboseLogging.Value)
+                {
+                    DebugLog.Verbose("DoorSync: skipping PlayMaker for vehicle door " + doorTransform.name);
+                }
+                return false;
+            }
+
             bool playMaker = AttachPlayMaker(fsm, entry, doorTransform.name);
             if (!playMaker)
             {
@@ -814,7 +990,6 @@ namespace MyWinterCarMpMod.Sync
             }
 
             entry.HasPlayMaker = playMaker;
-            entry.IsVehicleDoor = IsVehicleDoor(doorTransform, null);
             UpdateRotationSyncPolicy(entry);
             _doors.Add(entry);
             _doorLookup.Add(id, entry);
@@ -869,6 +1044,41 @@ namespace MyWinterCarMpMod.Sync
             }
         }
 
+        private static float NormalizeAngle(float angle)
+        {
+            return Mathf.Repeat(angle + 180f, 360f) - 180f;
+        }
+
+        private static void EnsureRemoteDoorKinematic(DoorEntry entry)
+        {
+            if (entry == null || entry.Rigidbody == null)
+            {
+                return;
+            }
+
+            if (!entry.Rigidbody.isKinematic)
+            {
+                entry.Rigidbody.isKinematic = true;
+                entry.Rigidbody.velocity = Vector3.zero;
+                entry.Rigidbody.angularVelocity = Vector3.zero;
+            }
+        }
+
+        private static void EnsureRemoteDoorDynamic(DoorEntry entry)
+        {
+            if (entry == null || entry.Rigidbody == null)
+            {
+                return;
+            }
+
+            if (entry.Rigidbody.isKinematic)
+            {
+                entry.Rigidbody.isKinematic = false;
+                entry.Rigidbody.velocity = Vector3.zero;
+                entry.Rigidbody.angularVelocity = Vector3.zero;
+            }
+        }
+
         private void UpdateRotationSyncPolicy(DoorEntry entry)
         {
             if (entry == null)
@@ -876,7 +1086,8 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
-            bool skip = entry.IsVehicleDoor && (entry.Hinge != null || entry.HasPlayMaker || entry.Rigidbody != null);
+            bool skip = entry.IsVehicleDoor &&
+                ((entry.Hinge != null && !entry.SkipHingeSync) || entry.AllowVehiclePlayMaker);
             if (entry.SkipRotationSync == skip)
             {
                 return;
@@ -1199,6 +1410,7 @@ namespace MyWinterCarMpMod.Sync
             }
             else if (entry.IsVehicleDoor)
             {
+                // Vehicle doors often transition via non-OPEN events; allow any trigger and filter later.
                 allowAnyEvent = true;
             }
 
@@ -1255,7 +1467,7 @@ namespace MyWinterCarMpMod.Sync
             {
                 entry.LastDoorOpen = entry.DoorOpenBool.Value;
             }
-            if (entry.IsVehicleDoor)
+            if (entry.IsVehicleDoor && !entry.SkipHingeSync)
             {
                 entry.SkipRotationSync = true;
             }
@@ -1365,6 +1577,26 @@ namespace MyWinterCarMpMod.Sync
                 {
                     return;
                 }
+            }
+            if (entry.IsVehicleDoor)
+            {
+                if (string.IsNullOrEmpty(triggerEvent))
+                {
+                    return;
+                }
+                if (!entry.AllowVehiclePlayMaker)
+                {
+                    if (string.Equals(triggerEvent, "FINISHED", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(triggerEvent, "LOOP", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(triggerEvent, "GLOBALEVENT", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return;
+                    }
+                }
+            }
+            if (entry.LastDoorOpen == open && now - entry.LastLocalChangeTime < 0.25f)
+            {
+                return;
             }
 
             entry.LastDoorOpen = open;
@@ -1585,6 +1817,17 @@ namespace MyWinterCarMpMod.Sync
             return hash;
         }
 
+        private void RegisterMissingDoorId(uint doorId, string context)
+        {
+            if (_missingDoorIds.Contains(doorId))
+            {
+                return;
+            }
+            _missingDoorIds.Add(doorId);
+            DebugLog.Warn("DoorSync " + context + " " + doorId + ". Ignoring until next scene.");
+            DumpDoorsOnce(context + " " + doorId);
+        }
+
         private void DumpDoorsOnce(string reason)
         {
             if (_dumpedDoors)
@@ -1667,6 +1910,8 @@ namespace MyWinterCarMpMod.Sync
             public bool HasPlayMaker;
             public bool IsVehicleDoor;
             public bool SkipRotationSync;
+            public bool SkipHingeSync;
+            public bool AllowVehiclePlayMaker;
             public InteractionKind InteractionKind;
             public string MpOpenEventName;
             public string MpCloseEventName;

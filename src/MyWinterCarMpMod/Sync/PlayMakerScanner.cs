@@ -12,10 +12,16 @@ namespace MyWinterCarMpMod.Sync
         {
             "sink", "tap", "faucet", "phone", "telephone", "fridge", "freezer", "refrigerator", "icebox"
         };
+        private static readonly string[] VehicleDoorTokens = new[]
+        {
+            "door", "hatch", "boot", "lid"
+        };
 
         private const int MaxNames = 12;
         private static int _lastSceneIndex = int.MinValue;
         private static string _lastSceneName = string.Empty;
+        private static int _lastVehicleDoorSceneIndex = int.MinValue;
+        private static string _lastVehicleDoorSceneName = string.Empty;
 
         public static void ScanInteractiveFsms(int levelIndex, string levelName, bool allowScan)
         {
@@ -63,6 +69,67 @@ namespace MyWinterCarMpMod.Sync
             }
 
             DebugLog.Info("PlayMakerScanner: matched " + matches + " FSM(s) of " + total + " in scene " + _lastSceneName);
+        }
+
+        public static void ScanVehicleDoorFsms(int levelIndex, string levelName, bool allowScan, string vehicleToken)
+        {
+            if (!allowScan || string.IsNullOrEmpty(vehicleToken))
+            {
+                return;
+            }
+
+            if (levelIndex == _lastVehicleDoorSceneIndex && string.Equals(levelName, _lastVehicleDoorSceneName, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _lastVehicleDoorSceneIndex = levelIndex;
+            _lastVehicleDoorSceneName = levelName ?? string.Empty;
+
+            PlayMakerFSM[] fsms = UnityEngine.Object.FindObjectsOfType<PlayMakerFSM>();
+            int total = fsms != null ? fsms.Length : 0;
+            if (total == 0)
+            {
+                DebugLog.Verbose("PlayMakerScanner: no FSMs found for vehicle scan in scene " + _lastVehicleDoorSceneName);
+                return;
+            }
+
+            string vehicleTokenLower = vehicleToken.ToLowerInvariant();
+            int matches = 0;
+            for (int i = 0; i < fsms.Length; i++)
+            {
+                PlayMakerFSM fsm = fsms[i];
+                if (fsm == null)
+                {
+                    continue;
+                }
+
+                string path = BuildDebugPath(fsm.transform);
+                if (!path.ToLowerInvariant().Contains(vehicleTokenLower))
+                {
+                    continue;
+                }
+
+                string fsmName = GetFsmName(fsm);
+                if (!NameContainsAny(fsmName, VehicleDoorTokens) &&
+                    !NameContainsAny(fsm.gameObject != null ? fsm.gameObject.name : string.Empty, VehicleDoorTokens) &&
+                    !NameContainsAny(path, VehicleDoorTokens))
+                {
+                    continue;
+                }
+
+                matches++;
+                string stateNames = JoinStateNames(fsm != null ? fsm.Fsm : null);
+                string eventNames = JoinEventNames(fsm != null ? fsm.Fsm : null);
+
+                DebugLog.Verbose("PlayMakerScanner: vehicle door fsm=" + fsmName +
+                    " go=" + (fsm != null ? fsm.gameObject.name : "<null>") +
+                    " path=" + path +
+                    " states=" + stateNames +
+                    " events=" + eventNames);
+            }
+
+            DebugLog.Info("PlayMakerScanner: matched " + matches + " vehicle door FSM(s) in scene " + _lastVehicleDoorSceneName);
         }
 
         private static bool IsMatch(PlayMakerFSM fsm)

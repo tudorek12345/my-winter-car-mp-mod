@@ -8,7 +8,7 @@ namespace MyWinterCarMpMod.Config
     {
         Host = 0,
         Client = 1,
-        Spectator = Client
+        Spectator = 2
     }
 
     public enum TransportKind

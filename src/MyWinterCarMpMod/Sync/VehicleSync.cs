@@ -21,6 +21,10 @@ namespace MyWinterCarMpMod.Sync
         private float _nextSampleTime;
         private bool _loggedNoVehicles;
         private bool _loggedSorbetSeatDump;
+        private const string SeatEnterFilter = "player in,playerin,incar,in car,seatbelt,drive,driver,ignition,enter";
+        private const string SeatExitFilter = "wait,press return,press,exit,leave";
+        private const string SeatEnterEventFilter = "player in car,player in,incar,in car";
+        private const string SeatExitEventFilter = "wait for player,wait,press return,press,exit,leave";
 
         public VehicleSync(Settings settings)
         {
@@ -207,6 +211,7 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
+                RefreshSeatFromFsm(entry, now);
                 bool wants = IsLocalDriver(entry, localPos, hasLocal);
                 if (wants != entry.LocalWantsControl && _settings != null && _settings.VerboseLogging.Value)
                 {
@@ -265,6 +270,7 @@ namespace MyWinterCarMpMod.Sync
 
             Vector3 localPos;
             bool hasLocal = TryGetLocalPosition(out localPos);
+            float now = Time.realtimeSinceStartup;
 
             for (int i = 0; i < _vehicles.Count; i++)
             {
@@ -274,6 +280,7 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
+                RefreshSeatFromFsm(entry, now);
                 bool wants = IsLocalDriver(entry, localPos, hasLocal);
                 entry.LocalWantsControl = wants;
 
@@ -376,6 +383,10 @@ namespace MyWinterCarMpMod.Sync
             }
 
             entry.Owner = update.Owner;
+            if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                DebugLog.Verbose("VehicleSync: ownership applied vehicle=" + entry.DebugPath + " owner=" + update.Owner);
+            }
             ApplyLocalControl(entry, localOwner);
         }
 
@@ -636,6 +647,46 @@ namespace MyWinterCarMpMod.Sync
             AttachSeatTriggers(entry, root);
         }
 
+        public bool IsLocalAuthorityForTransform(Transform transform, OwnerKind localOwner, bool includeUnowned)
+        {
+            if (transform == null)
+            {
+                return false;
+            }
+
+            VehicleEntry entry = FindEntryByTransform(transform);
+            if (entry == null)
+            {
+                return localOwner == OwnerKind.Host && includeUnowned;
+            }
+
+            return IsLocalAuthority(entry, localOwner, includeUnowned);
+        }
+
+        private VehicleEntry FindEntryByTransform(Transform transform)
+        {
+            if (transform == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < _vehicles.Count; i++)
+            {
+                VehicleEntry entry = _vehicles[i];
+                if (entry == null || entry.Transform == null)
+                {
+                    continue;
+                }
+
+                if (transform == entry.Transform || transform.IsChildOf(entry.Transform))
+                {
+                    return entry;
+                }
+            }
+
+            return null;
+        }
+
         private bool IsLocalAuthority(VehicleEntry entry, OwnerKind localOwner, bool includeUnowned)
         {
             if (entry == null)
@@ -712,22 +763,20 @@ namespace MyWinterCarMpMod.Sync
                 return false;
             }
 
-            if (entry.LocalDriverFromFsm)
-            {
-                return true;
-            }
+            float now = Time.realtimeSinceStartup;
+            bool force = entry.ForceOwnershipUntilTime > 0f && now <= entry.ForceOwnershipUntilTime;
+            bool fromFsm = entry.LocalDriverFromFsm;
 
+            bool childMatch = false;
             Transform body;
             Transform view;
             if (_playerLocator.TryGetLocalTransforms(out body, out view))
             {
                 Transform root = entry.Transform;
-                if (IsChildOf(body, root) || IsChildOf(view, root))
-                {
-                    return true;
-                }
+                childMatch = IsChildOf(body, root) || IsChildOf(view, root);
             }
 
+            bool cameraMatch = false;
             CarCameras cameras = FindCarCameras();
             if (cameras != null && cameras.driverView && cameras.mtarget != null)
             {
@@ -735,17 +784,34 @@ namespace MyWinterCarMpMod.Sync
                 Transform entryRoot = entry.Transform.root;
                 if (targetRoot == entryRoot)
                 {
-                    return true;
+                    cameraMatch = true;
                 }
             }
 
-            if (!hasLocal || entry.SeatTransform == null)
+            bool seatMatch = false;
+            float seatDistance = -1f;
+            if (hasLocal && entry.SeatTransform != null)
             {
-                return false;
+                seatDistance = Vector3.Distance(localPos, entry.SeatTransform.position);
+                seatMatch = seatDistance <= _settings.GetVehicleSeatDistance();
             }
 
-            float dist = Vector3.Distance(localPos, entry.SeatTransform.position);
-            return dist <= _settings.GetVehicleSeatDistance();
+            bool result = force || fromFsm || childMatch || cameraMatch || seatMatch;
+            if (_settings != null && _settings.VerboseLogging.Value && now - entry.LastDriverLogTime >= 1f)
+            {
+                DebugLog.Verbose("VehicleSync: local driver eval vehicle=" + entry.DebugPath +
+                    " result=" + result +
+                    " force=" + force +
+                    " fsm=" + fromFsm +
+                    " child=" + childMatch +
+                    " camera=" + cameraMatch +
+                    " seatDist=" + seatDistance.ToString("F2") +
+                    " seatOk=" + seatMatch +
+                    " hasLocal=" + hasLocal);
+                entry.LastDriverLogTime = now;
+            }
+
+            return result;
         }
 
         private static bool IsChildOf(Transform child, Transform parent)
@@ -848,6 +914,7 @@ namespace MyWinterCarMpMod.Sync
             }
 
             PlayMakerFSM best = null;
+            List<PlayMakerFSM> triggers = new List<PlayMakerFSM>();
             for (int i = 0; i < fsms.Length; i++)
             {
                 PlayMakerFSM fsm = fsms[i];
@@ -861,6 +928,7 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
+                triggers.Add(fsm);
                 if (best == null)
                 {
                     best = fsm;
@@ -875,33 +943,52 @@ namespace MyWinterCarMpMod.Sync
                 }
             }
 
-            if (best == null)
+            if (triggers.Count == 0)
             {
+                if (_settings != null && _settings.VerboseLogging.Value)
+                {
+                    DebugLog.Verbose("VehicleSync: no PlayerTrigger FSM found for vehicle=" + entry.DebugPath);
+                }
                 return;
             }
 
-            FsmState enterState = best.Fsm.GetState("Player in car");
-            FsmState exitState = best.Fsm.GetState("Wait for player");
-            if (enterState == null)
-            {
-                enterState = PlayMakerBridge.FindStateByNameContains(best, new[] { "player in", "enter", "drive" });
-            }
-            if (exitState == null)
-            {
-                exitState = PlayMakerBridge.FindStateByNameContains(best, new[] { "wait", "exit", "leave" });
-            }
-
-            if (enterState == null || exitState == null)
-            {
-                return;
-            }
-
+            entry.SeatFsms.Clear();
+            entry.SeatFsms.AddRange(triggers);
+            entry.SeatFsm = best;
             entry.SeatFsmName = !string.IsNullOrEmpty(best.Fsm.Name) ? best.Fsm.Name : best.FsmName;
-            PlayMakerBridge.PrependAction(enterState, new VehicleSeatAction(this, entry.Id, true));
-            PlayMakerBridge.PrependAction(exitState, new VehicleSeatAction(this, entry.Id, false));
+            entry.SeatTransform = best.gameObject != null ? best.gameObject.transform : entry.SeatTransform;
+            SeedSeatStateFromFsm(entry);
+            if (!_loggedSorbetSeatDump && entry.DebugPath != null &&
+                entry.DebugPath.IndexOf("SORBET", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                _loggedSorbetSeatDump = true;
+                for (int i = 0; i < triggers.Count; i++)
+                {
+                    PlayMakerFSM fsm = triggers[i];
+                    string objName = fsm != null && fsm.gameObject != null ? fsm.gameObject.name : "<null>";
+                    DumpFsmStates(fsm, entry.DebugPath + " obj=" + objName);
+                }
+            }
+
+            int hookedCount = 0;
+            int eventHookedCount = 0;
+            for (int i = 0; i < triggers.Count; i++)
+            {
+                if (HookSeatFsm(entry, triggers[i]))
+                {
+                    hookedCount++;
+                }
+                if (HookSeatEventTransitions(entry, triggers[i]))
+                {
+                    eventHookedCount++;
+                }
+            }
             if (_settings != null && _settings.VerboseLogging.Value)
             {
-                DebugLog.Verbose("VehicleSync: seat FSM hooked vehicle=" + entry.DebugPath + " fsm=" + entry.SeatFsmName);
+                DebugLog.Verbose("VehicleSync: seat FSM hooked vehicle=" + entry.DebugPath +
+                    " triggers=" + triggers.Count +
+                    " stateHooks=" + hookedCount +
+                    " eventHooks=" + eventHookedCount);
             }
         }
 
@@ -918,11 +1005,143 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
+            if (inSeat)
+            {
+                entry.ForceOwnershipUntilTime = Time.realtimeSinceStartup + 2f;
+            }
+            else
+            {
+                entry.ForceOwnershipUntilTime = 0f;
+            }
+
             entry.LocalDriverFromFsm = inSeat;
             if (_settings != null && _settings.VerboseLogging.Value)
             {
                 DebugLog.Verbose("VehicleSync: seat event vehicle=" + entry.DebugPath + " inSeat=" + inSeat);
             }
+        }
+
+        private bool HookSeatFsm(VehicleEntry entry, PlayMakerFSM fsm)
+        {
+            if (entry == null || fsm == null || fsm.Fsm == null)
+            {
+                return false;
+            }
+
+            List<FsmState> enterStates = FindStatesByNameContains(fsm, SeatEnterFilter);
+            List<FsmState> exitStates = FindStatesByNameContains(fsm, SeatExitFilter);
+            if (enterStates.Count == 0 && exitStates.Count == 0)
+            {
+                if (_settings != null && _settings.VerboseLogging.Value)
+                {
+                    string objName = fsm.gameObject != null ? fsm.gameObject.name : "<null>";
+                    DebugLog.Verbose("VehicleSync: seat FSM state tokens missing vehicle=" + entry.DebugPath +
+                        " fsm=" + (string.IsNullOrEmpty(entry.SeatFsmName) ? fsm.FsmName : entry.SeatFsmName) +
+                        " obj=" + objName);
+                }
+                return false;
+            }
+
+            for (int i = 0; i < enterStates.Count; i++)
+            {
+                PlayMakerBridge.PrependAction(enterStates[i], new VehicleSeatAction(this, entry.Id, true));
+            }
+            for (int i = 0; i < exitStates.Count; i++)
+            {
+                PlayMakerBridge.PrependAction(exitStates[i], new VehicleSeatAction(this, entry.Id, false));
+            }
+
+            if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                string objName = fsm.gameObject != null ? fsm.gameObject.name : "<null>";
+                DebugLog.Verbose("VehicleSync: seat FSM hook vehicle=" + entry.DebugPath +
+                    " fsm=" + fsm.FsmName +
+                    " obj=" + objName +
+                    " enterStates=" + enterStates.Count +
+                    " exitStates=" + exitStates.Count);
+            }
+
+            return true;
+        }
+
+        private bool HookSeatEventTransitions(VehicleEntry entry, PlayMakerFSM fsm)
+        {
+            if (entry == null || fsm == null || fsm.Fsm == null)
+            {
+                return false;
+            }
+
+            int fsmId = fsm.GetInstanceID();
+            if (entry.SeatEventHooked == null)
+            {
+                entry.SeatEventHooked = new HashSet<int>();
+            }
+            if (entry.SeatEventHooked.Contains(fsmId))
+            {
+                return false;
+            }
+
+            FsmState[] states = fsm.Fsm.States;
+            if (states == null || states.Length == 0)
+            {
+                return false;
+            }
+
+            entry.SeatEventHooked.Add(fsmId);
+            for (int i = 0; i < states.Length; i++)
+            {
+                FsmState state = states[i];
+                if (state == null)
+                {
+                    continue;
+                }
+                PlayMakerBridge.PrependAction(state, new VehicleSeatEventAction(this, entry.Id, fsm));
+            }
+
+            if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                string objName = fsm.gameObject != null ? fsm.gameObject.name : "<null>";
+                DebugLog.Verbose("VehicleSync: seat event hook vehicle=" + entry.DebugPath +
+                    " fsm=" + fsm.FsmName +
+                    " obj=" + objName +
+                    " states=" + states.Length);
+            }
+
+            return true;
+        }
+
+        private static void DumpFsmStates(PlayMakerFSM fsm, string vehiclePath)
+        {
+            if (fsm == null || fsm.Fsm == null)
+            {
+                return;
+            }
+
+            FsmState[] states = fsm.Fsm.States;
+            if (states == null || states.Length == 0)
+            {
+                DebugLog.Verbose("VehicleSync: seat FSM dump (no states) vehicle=" + vehiclePath);
+                return;
+            }
+
+            System.Text.StringBuilder builder = new System.Text.StringBuilder();
+            for (int i = 0; i < states.Length; i++)
+            {
+                if (states[i] == null || string.IsNullOrEmpty(states[i].Name))
+                {
+                    continue;
+                }
+                if (builder.Length > 0)
+                {
+                    builder.Append(", ");
+                }
+                builder.Append(states[i].Name);
+            }
+
+            string fsmName = !string.IsNullOrEmpty(fsm.Fsm.Name) ? fsm.Fsm.Name : fsm.FsmName;
+            DebugLog.Verbose("VehicleSync: seat FSM states vehicle=" + vehiclePath +
+                " fsm=" + fsmName +
+                " states=" + builder.ToString());
         }
 
         private static Transform GetSyncTransform(VehicleEntry entry)
@@ -960,6 +1179,238 @@ namespace MyWinterCarMpMod.Sync
             return false;
         }
 
+        private static List<FsmState> FindStatesByNameContains(PlayMakerFSM fsm, string filter)
+        {
+            List<FsmState> matches = new List<FsmState>();
+            if (fsm == null || fsm.Fsm == null || string.IsNullOrEmpty(filter))
+            {
+                return matches;
+            }
+
+            FsmState[] states = fsm.Fsm.States;
+            if (states == null || states.Length == 0)
+            {
+                return matches;
+            }
+
+            for (int i = 0; i < states.Length; i++)
+            {
+                FsmState state = states[i];
+                if (state == null || string.IsNullOrEmpty(state.Name))
+                {
+                    continue;
+                }
+                if (NameContains(state.Name, filter))
+                {
+                    matches.Add(state);
+                }
+            }
+
+            return matches;
+        }
+
+        private void SeedSeatStateFromFsm(VehicleEntry entry)
+        {
+            bool inSeat;
+            string stateName;
+            string fsmName;
+            if (!TryEvaluateSeatState(entry, out inSeat, out stateName, out fsmName))
+            {
+                return;
+            }
+
+            entry.LocalDriverFromFsm = inSeat;
+            if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                DebugLog.Verbose("VehicleSync: seat FSM active vehicle=" + entry.DebugPath +
+                    " fsm=" + (fsmName ?? "<null>") +
+                    " state=" + (stateName ?? "<null>") +
+                    " inSeat=" + inSeat);
+            }
+        }
+
+        private void RefreshSeatFromFsm(VehicleEntry entry, float now)
+        {
+            if (entry == null)
+            {
+                return;
+            }
+
+            TraceSeatFsmState(entry, now);
+            if (now - entry.LastSeatStatePollTime < 0.25f)
+            {
+                return;
+            }
+            entry.LastSeatStatePollTime = now;
+
+            bool inSeat;
+            string stateName;
+            string fsmName;
+            if (!TryEvaluateSeatState(entry, out inSeat, out stateName, out fsmName))
+            {
+                return;
+            }
+
+            if (entry.LocalDriverFromFsm == inSeat)
+            {
+                return;
+            }
+
+            entry.LocalDriverFromFsm = inSeat;
+            if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                DebugLog.Verbose("VehicleSync: seat FSM poll vehicle=" + entry.DebugPath +
+                    " fsm=" + (fsmName ?? "<null>") +
+                    " state=" + (stateName ?? "<null>") +
+                    " inSeat=" + inSeat);
+            }
+        }
+
+        private void TraceSeatFsmState(VehicleEntry entry, float now)
+        {
+            if (entry == null || _settings == null || !_settings.VerboseLogging.Value)
+            {
+                return;
+            }
+
+            if (string.IsNullOrEmpty(entry.DebugPath) ||
+                entry.DebugPath.IndexOf("SORBET", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return;
+            }
+
+            List<PlayMakerFSM> fsms = entry.SeatFsms;
+            if (fsms == null || fsms.Count == 0)
+            {
+                return;
+            }
+
+            if (entry.SeatFsmStateNames == null)
+            {
+                entry.SeatFsmStateNames = new Dictionary<int, string>();
+            }
+            if (entry.SeatFsmEventNames == null)
+            {
+                entry.SeatFsmEventNames = new Dictionary<int, string>();
+            }
+
+            bool logged = false;
+            for (int i = 0; i < fsms.Count; i++)
+            {
+                PlayMakerFSM fsm = fsms[i];
+                if (fsm == null || fsm.Fsm == null)
+                {
+                    continue;
+                }
+
+                int fsmId = fsm.GetInstanceID();
+                string stateName = fsm.Fsm.ActiveStateName ?? "<null>";
+                string eventName = fsm.Fsm.LastTransition != null ? fsm.Fsm.LastTransition.EventName : "<null>";
+
+                string prevState;
+                string prevEvent;
+                entry.SeatFsmStateNames.TryGetValue(fsmId, out prevState);
+                entry.SeatFsmEventNames.TryGetValue(fsmId, out prevEvent);
+
+                if (!string.Equals(stateName, prevState, StringComparison.Ordinal) ||
+                    !string.Equals(eventName, prevEvent, StringComparison.Ordinal))
+                {
+                    string fsmName = !string.IsNullOrEmpty(fsm.Fsm.Name) ? fsm.Fsm.Name : fsm.FsmName;
+                    DebugLog.Verbose("VehicleSync: seat FSM trace vehicle=" + entry.DebugPath +
+                        " fsm=" + fsmName +
+                        " state=" + stateName +
+                        " event=" + eventName);
+                    entry.SeatFsmStateNames[fsmId] = stateName;
+                    entry.SeatFsmEventNames[fsmId] = eventName;
+                    logged = true;
+                }
+            }
+
+            if (logged)
+            {
+                entry.LastSeatTraceTime = now;
+            }
+        }
+
+        private bool TryEvaluateSeatState(VehicleEntry entry, out bool inSeat, out string stateName, out string fsmName)
+        {
+            inSeat = false;
+            stateName = null;
+            fsmName = null;
+
+            if (entry == null)
+            {
+                return false;
+            }
+
+            bool found = false;
+            List<PlayMakerFSM> fsms = entry.SeatFsms;
+            if (fsms != null && fsms.Count > 0)
+            {
+                for (int i = 0; i < fsms.Count; i++)
+                {
+                    bool fsmInSeat;
+                    string fsmState;
+                    string fsmLabel;
+                    if (!TryGetSeatStateFromFsm(fsms[i], out fsmInSeat, out fsmState, out fsmLabel))
+                    {
+                        continue;
+                    }
+
+                    found = true;
+                    if (fsmInSeat)
+                    {
+                        inSeat = true;
+                        stateName = fsmState;
+                        fsmName = fsmLabel;
+                        return true;
+                    }
+
+                    if (stateName == null)
+                    {
+                        stateName = fsmState;
+                        fsmName = fsmLabel;
+                    }
+                }
+            }
+            else
+            {
+                found = TryGetSeatStateFromFsm(entry.SeatFsm, out inSeat, out stateName, out fsmName);
+            }
+
+            return found;
+        }
+
+        private static bool TryGetSeatStateFromFsm(PlayMakerFSM fsm, out bool inSeat, out string stateName, out string fsmName)
+        {
+            inSeat = false;
+            stateName = null;
+            fsmName = null;
+
+            if (fsm == null || fsm.Fsm == null)
+            {
+                return false;
+            }
+
+            FsmState active = fsm.Fsm.ActiveState;
+            if (active == null || string.IsNullOrEmpty(active.Name))
+            {
+                return false;
+            }
+
+            bool inSeatFlag = NameContains(active.Name, SeatEnterFilter);
+            bool outSeatFlag = NameContains(active.Name, SeatExitFilter);
+            if (!inSeatFlag && !outSeatFlag)
+            {
+                return false;
+            }
+
+            inSeat = inSeatFlag && !outSeatFlag;
+            stateName = active.Name;
+            fsmName = !string.IsNullOrEmpty(fsm.Fsm.Name) ? fsm.Fsm.Name : fsm.FsmName;
+            return true;
+        }
+
         private sealed class VehicleEntry
         {
             public uint Id;
@@ -973,6 +1424,7 @@ namespace MyWinterCarMpMod.Sync
             public CarDynamics.Controller OriginalController;
             public bool LocalWantsControl;
             public float LastOwnershipRequestTime;
+            public float LastOwnershipLogTime;
             public Vector3 LastSentPosition;
             public Quaternion LastSentRotation;
             public uint LastRemoteSequence;
@@ -980,6 +1432,15 @@ namespace MyWinterCarMpMod.Sync
             public bool ControlInitialized;
             public bool LocalDriverFromFsm;
             public string SeatFsmName;
+            public PlayMakerFSM SeatFsm;
+            public List<PlayMakerFSM> SeatFsms = new List<PlayMakerFSM>();
+            public float LastSeatStatePollTime;
+            public HashSet<int> SeatEventHooked = new HashSet<int>();
+            public float LastDriverLogTime;
+            public float ForceOwnershipUntilTime;
+            public float LastSeatTraceTime;
+            public Dictionary<int, string> SeatFsmStateNames;
+            public Dictionary<int, string> SeatFsmEventNames;
         }
 
         private sealed class VehicleCandidate
@@ -1008,6 +1469,50 @@ namespace MyWinterCarMpMod.Sync
                 if (_owner != null)
                 {
                     _owner.NotifySeatEvent(_vehicleId, _inSeat);
+                }
+            }
+        }
+
+        private sealed class VehicleSeatEventAction : FsmStateAction
+        {
+            private readonly VehicleSync _owner;
+            private readonly uint _vehicleId;
+            private readonly PlayMakerFSM _fsm;
+
+            public VehicleSeatEventAction(VehicleSync owner, uint vehicleId, PlayMakerFSM fsm)
+            {
+                _owner = owner;
+                _vehicleId = vehicleId;
+                _fsm = fsm;
+            }
+
+            public override void OnEnter()
+            {
+                Finish();
+                if (_owner == null || _fsm == null || _fsm.Fsm == null)
+                {
+                    return;
+                }
+
+                FsmTransition transition = _fsm.Fsm.LastTransition;
+                if (transition == null || string.IsNullOrEmpty(transition.EventName))
+                {
+                    return;
+                }
+
+                string eventName = transition.EventName;
+                if (eventName.StartsWith("MP_", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                if (NameContains(eventName, SeatEnterEventFilter))
+                {
+                    _owner.NotifySeatEvent(_vehicleId, true);
+                }
+                else if (NameContains(eventName, SeatExitEventFilter))
+                {
+                    _owner.NotifySeatEvent(_vehicleId, false);
                 }
             }
         }
