@@ -3,16 +3,22 @@
 
 
 ## Current Status
-Host and client can connect in-game and both see each other. Interior room doors plus the cabin front/back entrances sync. Cabin sink/tap and fridge interactions sync. Time-of-day lighting sync is working. Remote avatar now uses a proper model, AssetBundle (static mesh), but scale/offset are still being tuned. The Sorbet car is in active development: doors sync partially, driving/ownership is still WIP.
+Host and client can connect in-game and both see each other using the MWCMP model avatar (static mesh, scaled and grounded). Interior room doors plus the cabin front/back entrances sync. Cabin sink/tap and fridge interactions sync. Time-of-day lighting sync is working. The Sorbet car is in active development: doors sync complete, driving/ownership is still WIP.
 
 OFFICIAL DISCORD
 https://discord.gg/GQeC5tCH2w
 
 ## Current Version [STATUS]
 0.1.5 - 2026-01-14
-Remote avatar now loads a proper model, AssetBundle; scale/offset tuning in progress.
+MWCMP avatar bundle integrated with auto-grounding; scale/offset tuned (still configurable).
 Cabin sink/tap and fridge interactions sync.
-Sorbet vehicle sync is still WIP: doors partially sync, driving/ownership still in progress.
+Sorbet vehicle sync is still WIP: doors sync for both players, driving/ownership still in progress.
+
+## Recent Progress
+- Swapped the blue capsule for the MWCMP model avatar (static mesh) with grounding and scale tuning.
+- Cabin door sync stabilized (room doors + front/back cabin entrances).
+- Sink/tap and fridge interactions now replicate.
+- Time-of-day lighting replication verified across host/client.
 
 
 ## Requirements
@@ -99,8 +105,8 @@ VehicleSync:
 Avatar:
 - `BundlePath = plugins\MyWinterCarMpMod\mpdata`
 - `AssetName = assets/mpplayermodel/mpplayermodel.fbx`
-- `Scale = 3.0` (tune)
-- `YOffset = 0.2` (tune)
+- `Scale = 3.5` (tune)
+- `YOffset = 0.6` (tune)
 
 Networking:
 - `ConnectionTimeoutSeconds = 10`
@@ -119,9 +125,9 @@ Spectator:
 - Per-instance mod log: `BepInEx/LogOutput_MyWinterCarMpMod_<pid>.log`
 
 ## Avatar Setup (AssetBundle)
-1. Build or provide an AssetBundle that contains a player prefab or mesh. The current default uses the MSCMP `mpdata` bundle.
+1. Build or provide an AssetBundle that contains a player prefab or mesh. The current default uses the MWCMP `mpdata` bundle.
 2. Set `Avatar.BundlePath` to the bundle path and `Avatar.AssetName` to the prefab/mesh name (default: `assets/mpplayermodel/mpplayermodel.fbx`).
-3. Tune `Avatar.Scale` and `Avatar.YOffset` if the model is too big/small or sinks into the ground (scale/offset tuning is still in progress).
+3. Tune `Avatar.Scale` and `Avatar.YOffset` if the model is too big/small or sinks into the ground (auto-ground offset is applied; scale/offset is configurable).
 
 ## Dev Guide
 See `instructions.txt` for iteration, build, deploy, and multi-instance notes.

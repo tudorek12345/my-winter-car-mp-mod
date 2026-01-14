@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5 - 2026-01-14
+- Remote avatar now loads the MWCMP mpdata AssetBundle by default (Unity 5.0.0f4 build).
+- Added auto-ground offset using mesh bounds and tuned scale defaults (Scale 3.5, YOffset 0.6).
+- Cabin sink/tap and fridge interactions sync.
+- Sorbet vehicle sync is still WIP: doors almot complete, driving/ownership working but clunky - still in progress.
+
 ## 0.1.4 - 2026-01-11
 - Added vehicle hinge door updates (protocol v7) and spring-based remote apply to avoid car jumps.
 - Updated vehicle door rotation policy with clearer logging and safe fallback for non-physics doors.

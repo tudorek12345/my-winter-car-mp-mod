@@ -14,7 +14,7 @@ using UnityEngine;
 
 namespace MyWinterCarMpMod
 {
-    [BepInPlugin("com.tudor.mywintercarmpmod", "My Winter Car MP Mod", "0.1.4")]
+    [BepInPlugin("com.tudor.mywintercarmpmod", "My Winter Car MP Mod", "0.1.5")]
     public sealed class Plugin : BaseUnityPlugin
     {
         internal static bool AllowMultipleInstances;

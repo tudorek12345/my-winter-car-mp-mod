@@ -215,9 +215,89 @@ namespace MyWinterCarMpMod.Sync
         {
             float scale = _settings != null ? Mathf.Max(0.01f, _settings.RemoteAvatarScale.Value) : 1f;
             float yOffset = _settings != null ? _settings.RemoteAvatarYOffset.Value : 0f;
-            transform.localPosition = new Vector3(0f, yOffset, 0f);
             transform.localRotation = Quaternion.identity;
             transform.localScale = Vector3.one * scale;
+            transform.localPosition = Vector3.zero;
+
+            float autoOffset = ComputeAutoYOffset(transform);
+            transform.localPosition = new Vector3(0f, yOffset + autoOffset, 0f);
+        }
+
+        private static float ComputeAutoYOffset(Transform root)
+        {
+            float minY = float.PositiveInfinity;
+            float maxY = float.NegativeInfinity;
+            bool found = false;
+
+            MeshFilter[] filters = root.GetComponentsInChildren<MeshFilter>(true);
+            for (int i = 0; i < filters.Length; i++)
+            {
+                MeshFilter filter = filters[i];
+                if (filter == null)
+                {
+                    continue;
+                }
+                UpdateMeshBounds(root, filter.transform, filter.sharedMesh, ref minY, ref maxY, ref found);
+            }
+
+            SkinnedMeshRenderer[] skinned = root.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+            for (int i = 0; i < skinned.Length; i++)
+            {
+                SkinnedMeshRenderer renderer = skinned[i];
+                if (renderer == null)
+                {
+                    continue;
+                }
+                UpdateMeshBounds(root, renderer.transform, renderer.sharedMesh, ref minY, ref maxY, ref found);
+            }
+
+            if (!found)
+            {
+                return 0f;
+            }
+
+            float autoOffset = -minY;
+            DebugLog.Verbose("Avatar mesh bounds minY=" + minY + " maxY=" + maxY + " height=" + (maxY - minY) + " autoYOffset=" + autoOffset);
+            return autoOffset;
+        }
+
+        private static void UpdateMeshBounds(Transform root, Transform meshTransform, Mesh mesh, ref float minY, ref float maxY, ref bool found)
+        {
+            if (root == null || meshTransform == null || mesh == null)
+            {
+                return;
+            }
+
+            Bounds bounds = mesh.bounds;
+            Vector3 min = bounds.min;
+            Vector3 max = bounds.max;
+            Vector3[] corners = new Vector3[]
+            {
+                new Vector3(min.x, min.y, min.z),
+                new Vector3(min.x, min.y, max.z),
+                new Vector3(min.x, max.y, min.z),
+                new Vector3(min.x, max.y, max.z),
+                new Vector3(max.x, min.y, min.z),
+                new Vector3(max.x, min.y, max.z),
+                new Vector3(max.x, max.y, min.z),
+                new Vector3(max.x, max.y, max.z)
+            };
+
+            for (int i = 0; i < corners.Length; i++)
+            {
+                Vector3 world = meshTransform.TransformPoint(corners[i]);
+                Vector3 local = root.InverseTransformPoint(world);
+                float y = local.y;
+                if (y < minY)
+                {
+                    minY = y;
+                }
+                if (y > maxY)
+                {
+                    maxY = y;
+                }
+                found = true;
+            }
         }
 
         private static void DisableColliders(GameObject root)
