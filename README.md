@@ -3,19 +3,16 @@
 
 
 ## Current Status
-Host and client can connect in-game and both see the remote capsule rig. Interior room doors plus the cabin front/back entrances sync. Vehicle doors are still WIP (hinge path added, reliability pending).
+Host and client can connect in-game and both see each other. Interior room doors plus the cabin front/back entrances sync. Cabin sink/tap and fridge interactions sync. Time-of-day lighting sync is working. Remote avatar now uses a proper model, AssetBundle (static mesh), but scale/offset are still being tuned. The Sorbet car is in active development: doors sync partially, driving/ownership is still WIP.
 
 OFFICIAL DISCORD
 https://discord.gg/GQeC5tCH2w
 
 ## Current Version [STATUS]
-0.1.4 - 2026-01-12
-Added vehicle hinge door updates (protocol v7) and spring-based remote apply to avoid car jumps.
-Updated vehicle door rotation policy with clearer logging and safe fallback for non-physics doors.
-Expanded DoorSync name filter defaults to include sink/tap hinges.
-Added avatar AssetBundle config (BundlePath, AssetName, Scale, YOffset).
-Added PlayMaker FSM scanner for sink/phone diagnostics (verbose logging only).
-Added TimeOfDay sync (also logs time for both client and host in overlay)
+0.1.5 - 2026-01-14
+Remote avatar now loads a proper model, AssetBundle; scale/offset tuning in progress.
+Cabin sink/tap and fridge interactions sync.
+Sorbet vehicle sync is still WIP: doors partially sync, driving/ownership still in progress.
 
 
 ## Requirements
@@ -91,8 +88,8 @@ PickupSync:
 - `NameFilter = ` (optional filter, comma-separated)
 
 VehicleSync:
-- `Enabled = false` (experimental, Sorbet sync WIP)
-- `ClientSend = false`
+- `Enabled = true` (experimental, Sorbet sync WIP)
+- `ClientSend = true`
 - `OwnershipEnabled = true`
 - `SeatDistance = 1.2`
 - `SendHz = 10`
@@ -100,10 +97,10 @@ VehicleSync:
 - `RotationThreshold = 1.0`
 
 Avatar:
-- `BundlePath = C:\path\to\bundle`
-- `AssetName = YourAvatarPrefab`
-- `Scale = 1.0`
-- `YOffset = 0.0`
+- `BundlePath = plugins\MyWinterCarMpMod\mpdata`
+- `AssetName = assets/mpplayermodel/mpplayermodel.fbx`
+- `Scale = 3.0` (tune)
+- `YOffset = 0.2` (tune)
 
 Networking:
 - `ConnectionTimeoutSeconds = 10`
@@ -122,9 +119,9 @@ Spectator:
 - Per-instance mod log: `BepInEx/LogOutput_MyWinterCarMpMod_<pid>.log`
 
 ## Avatar Setup (AssetBundle)
-1. Extract or build an AssetBundle that contains a player prefab or mesh.
-2. Set `Avatar.BundlePath` to the bundle path and `Avatar.AssetName` to the prefab/mesh name.
-3. Tune `Avatar.Scale` and `Avatar.YOffset` if the model is too big/small or sinks into the ground.
+1. Build or provide an AssetBundle that contains a player prefab or mesh. The current default uses the MSCMP `mpdata` bundle.
+2. Set `Avatar.BundlePath` to the bundle path and `Avatar.AssetName` to the prefab/mesh name (default: `assets/mpplayermodel/mpplayermodel.fbx`).
+3. Tune `Avatar.Scale` and `Avatar.YOffset` if the model is too big/small or sinks into the ground (scale/offset tuning is still in progress).
 
 ## Dev Guide
 See `instructions.txt` for iteration, build, deploy, and multi-instance notes.

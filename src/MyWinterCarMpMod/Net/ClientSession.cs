@@ -686,6 +686,7 @@ namespace MyWinterCarMpMod.Net
         private void SendOwnershipRequests()
         {
             float now = Time.realtimeSinceStartup;
+            bool anyRequest = false;
             if (_vehicleSync != null && _settings.VehicleOwnershipEnabled.Value)
             {
                 int count = _vehicleSync.CollectOwnershipRequests(OwnerKind.Client, _ownershipRequestBuffer);
@@ -703,6 +704,7 @@ namespace MyWinterCarMpMod.Net
                         _transport.Send(payload, _settings.ReliableForControl.Value);
                     }
 
+                    anyRequest = true;
                     if (_verbose && now >= _nextOwnershipLogTime)
                     {
                         DebugLog.Verbose("Ownership request sent. Kind=" + request.Kind +
@@ -730,6 +732,7 @@ namespace MyWinterCarMpMod.Net
                         _transport.Send(payload, _settings.ReliableForControl.Value);
                     }
 
+                    anyRequest = true;
                     if (_verbose && now >= _nextOwnershipLogTime)
                     {
                         DebugLog.Verbose("Ownership request sent. Kind=" + request.Kind +
@@ -738,6 +741,12 @@ namespace MyWinterCarMpMod.Net
                         _nextOwnershipLogTime = now + 0.5f;
                     }
                 }
+            }
+
+            if (!anyRequest && _verbose && now >= _nextOwnershipLogTime)
+            {
+                DebugLog.Verbose("Ownership request tick: none");
+                _nextOwnershipLogTime = now + 1f;
             }
         }
 

@@ -130,6 +130,11 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
+                if (entry.AllowVehiclePlayMaker)
+                {
+                    continue;
+                }
+
                 if (entry.SkipRotationSync)
                 {
                     continue;
@@ -165,8 +170,9 @@ namespace MyWinterCarMpMod.Sync
             {
                 DoorEntry entry = _doors[0];
                 string doorName = entry.Transform != null ? entry.Transform.name : "<null>";
+                string doorPath = !string.IsNullOrEmpty(entry.DebugPath) ? entry.DebugPath : "<null>";
                 string angleNote = entry.Hinge != null ? (" angle=" + entry.Hinge.angle.ToString("F1")) : string.Empty;
-                DebugLog.Verbose("DoorSync: sending " + buffer.Count + " update(s). First=" + doorName + angleNote);
+                DebugLog.Verbose("DoorSync: sending " + buffer.Count + " update(s). First=" + doorName + angleNote + " path=" + doorPath);
                 _nextSummaryTime = now + 1f;
             }
 
@@ -194,6 +200,11 @@ namespace MyWinterCarMpMod.Sync
             {
                 DoorEntry entry = _doors[i];
                 if (!entry.IsVehicleDoor || entry.Hinge == null)
+                {
+                    continue;
+                }
+
+                if (entry.AllowVehiclePlayMaker)
                 {
                     continue;
                 }
@@ -236,7 +247,8 @@ namespace MyWinterCarMpMod.Sync
                 DoorEntry entry;
                 _doorLookup.TryGetValue(buffer[0].DoorId, out entry);
                 string doorName = entry != null && entry.Transform != null ? entry.Transform.name : "<null>";
-                DebugLog.Verbose("DoorSync: sending " + buffer.Count + " hinge update(s). First=" + doorName + " angle=" + buffer[0].Angle.ToString("F1"));
+                string doorPath = entry != null && !string.IsNullOrEmpty(entry.DebugPath) ? entry.DebugPath : "<null>";
+                DebugLog.Verbose("DoorSync: sending " + buffer.Count + " hinge update(s). First=" + doorName + " angle=" + buffer[0].Angle.ToString("F1") + " path=" + doorPath);
                 _nextHingeSendLogTime = now + 1f;
             }
 
@@ -485,7 +497,7 @@ namespace MyWinterCarMpMod.Sync
             entry.LastDoorOpen = state.Open != 0;
 
             string eventName = state.Open != 0 ? entry.MpOpenEventName : entry.MpCloseEventName;
-            if (entry.AllowVehiclePlayMaker && entry.IsVehicleDoor)
+            if (entry.AllowVehiclePlayMaker && !entry.IsVehicleDoor)
             {
                 string nativeEvent = state.Open != 0 ? entry.OpenEventName : entry.CloseEventName;
                 if (!string.IsNullOrEmpty(nativeEvent) && entry.Fsm.Fsm != null && entry.Fsm.Fsm.HasEvent(nativeEvent))

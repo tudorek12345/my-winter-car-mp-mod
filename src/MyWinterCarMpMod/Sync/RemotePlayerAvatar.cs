@@ -1,4 +1,5 @@
 using System.IO;
+using BepInEx;
 using MyWinterCarMpMod.Config;
 using MyWinterCarMpMod.Net;
 using MyWinterCarMpMod.Util;
@@ -116,7 +117,7 @@ namespace MyWinterCarMpMod.Sync
                 return false;
             }
 
-            string bundlePath = _settings.RemoteAvatarBundlePath.Value;
+            string bundlePath = ResolveBundlePath(_settings.RemoteAvatarBundlePath.Value);
             string assetName = _settings.RemoteAvatarAssetName.Value;
             if (string.IsNullOrEmpty(bundlePath) || string.IsNullOrEmpty(assetName))
             {
@@ -177,6 +178,37 @@ namespace MyWinterCarMpMod.Sync
             DebugLog.Warn("Remote avatar asset not found in bundle: " + assetName);
             _bundleFailed = true;
             return false;
+        }
+
+        private static string ResolveBundlePath(string bundlePath)
+        {
+            if (string.IsNullOrEmpty(bundlePath))
+            {
+                return bundlePath;
+            }
+
+            if (Path.IsPathRooted(bundlePath))
+            {
+                return bundlePath;
+            }
+
+            string bepInExRoot = Paths.BepInExRootPath;
+            if (!string.IsNullOrEmpty(bepInExRoot))
+            {
+                return Path.GetFullPath(Path.Combine(bepInExRoot, bundlePath));
+            }
+
+            string dataPath = Application.dataPath;
+            if (!string.IsNullOrEmpty(dataPath))
+            {
+                string gameRoot = Path.GetDirectoryName(dataPath);
+                if (!string.IsNullOrEmpty(gameRoot))
+                {
+                    return Path.GetFullPath(Path.Combine(gameRoot, bundlePath));
+                }
+            }
+
+            return bundlePath;
         }
 
         private void ApplyAvatarTransform(Transform transform)
