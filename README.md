@@ -9,7 +9,8 @@ OFFICIAL DISCORD
 https://discord.gg/GQeC5tCH2w
 
 ## Current Version [STATUS]
-0.1.5 - 2026-01-14
+0.1.5 - 2026-01-14 <img width="3837" height="2156" alt="mwcmp avatars" src="https://github.com/user-attachments/assets/2b531032-a4e2-4381-9f2a-1bd4148e365c" />
+
 MWCMP avatar bundle integrated with auto-grounding; scale/offset tuned (still configurable).
 Cabin sink/tap and fridge interactions sync.
 Sorbet vehicle sync is still WIP: doors sync for both players, driving/ownership still in progress.
