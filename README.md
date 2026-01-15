@@ -46,80 +46,7 @@ Local testing (two instances):
 - Set `Compatibility/AllowMultipleInstances = true` and restart the game.
 - This skips Steam bootstrap, so use LAN transport only.
 
-## Config (BepInEx)
-General:
-- `Mode = Host | Client`
-- `Transport = SteamP2P | TcpLan`
-- `SendHz = 20`
-- `SmoothingPosition = 0.15`
-- `SmoothingRotation = 0.15`
-- `OverlayEnabled = true`
-- `VerboseLogging = true` (set false to reduce log noise)
 
-UI:
-- `MainMenuPanelEnabled = true`
-
-Compatibility:
-- `AllowMultipleInstances = false`
-
-Steam P2P:
-- `SpectatorHostSteamId = 0`
-- `AllowOnlySteamId = 0`
-- `P2PChannel = 0`
-- `ReliableForControl = true`
-
-TCP LAN:
-- `HostBindIP = 0.0.0.0`
-- `HostPort = 27055`
-- `SpectatorHostIP = 127.0.0.1`
-
-LanDiscovery:
-- `Enabled = true`
-- `Port = 27056`
-- `BroadcastIntervalSeconds = 1.5`
-- `HostTimeoutSeconds = 5`
-
-DoorSync:
-- `Enabled = true`
-- `PlayMakerEvents = true`
-- `SendHz = 10`
-- `AngleThreshold = 1`
-- `NameFilter = door,ovi,tap,faucet,sink` (empty = all hinges)
-
-PickupSync:
-- `Enabled = false` (set true to sync cabin pickups like phone/props)
-- `ClientSend = false`
-- `SendHz = 12`
-- `PositionThreshold = 0.02`
-- `RotationThreshold = 2.0`
-- `NameFilter = ` (optional filter, comma-separated)
-
-VehicleSync:
-- `Enabled = true` (experimental, Sorbet sync WIP)
-- `ClientSend = true`
-- `OwnershipEnabled = true`
-- `SeatDistance = 1.2`
-- `SendHz = 10`
-- `PositionThreshold = 0.05`
-- `RotationThreshold = 1.0`
-
-Avatar:
-- `BundlePath = plugins\MyWinterCarMpMod\mpdata`
-- `AssetName = assets/mpplayermodel/mpplayermodel.fbx`
-- `Scale = 3.5` (tune)
-- `YOffset = 0.6` (tune)
-
-Networking:
-- `ConnectionTimeoutSeconds = 10`
-- `HelloRetrySeconds = 2`
-- `KeepAliveSeconds = 2`
-- `AutoReconnect = true`
-- `ReconnectDelaySeconds = 3`
-- `MaxReconnectAttempts = 5` (0 = infinite)
-- `LevelSyncIntervalSeconds = 5`
-
-Spectator:
-- `SpectatorLockdown = true` (legacy, unused in co-op)
 
 ## Logs
 - BepInEx global log: `BepInEx/LogOutput.log`
@@ -130,15 +57,5 @@ Spectator:
 2. Set `Avatar.BundlePath` to the bundle path and `Avatar.AssetName` to the prefab/mesh name (default: `assets/mpplayermodel/mpplayermodel.fbx`).
 3. Tune `Avatar.Scale` and `Avatar.YOffset` if the model is too big/small or sinks into the ground (auto-ground offset is applied; scale/offset is configurable).
 
-## Dev Guide
-See `instructions.txt` for iteration, build, deploy, and multi-instance notes.
 
-## Build Notes
-- Target framework is .NET Framework 3.5 for older Unity (Mono).
-- Update `GameDir` in `src/MyWinterCarMpMod/MyWinterCarMpMod.csproj` or pass `-p:GameDir=...`.
-- If .NET 3.5 reference assemblies are missing, use the game's Managed folder:
-  ```powershell
-  dotnet build src/MyWinterCarMpMod/MyWinterCarMpMod.csproj -c Release `
-    -p:GameDir="C:\Games\My.Winter.Car\game" `
-    -p:FrameworkPathOverride="C:\Games\My.Winter.Car\game\MyWinterCar_Data\Managed"
-  ```
+
