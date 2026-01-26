@@ -29,9 +29,17 @@ namespace MyWinterCarMpMod
         private VehicleSync _vehicleSync;
         private PickupSync _pickupSync;
         private TimeOfDaySync _timeSync;
+        private NpcSync _npcSync;
         private ITransport _transport;
         private LanDiscovery _lanDiscovery;
         private Vector2 _lanScroll;
+        private DevFreecam _devFreecam;
+        private bool _devMenuVisible;
+        private Vector2 _devMenuScroll;
+        private readonly PlayerLocator _devPlayerLocator = new PlayerLocator();
+        private Vector3 _devSavedPosition;
+        private bool _devHasSavedPosition;
+        private string _devStatus;
 
         private string _menuSteamIdText;
         private string _menuHostIpText;
@@ -75,6 +83,8 @@ namespace MyWinterCarMpMod
             _doorSync.SetVehicleSync(_vehicleSync);
             _pickupSync = new PickupSync(_settings);
             _timeSync = new TimeOfDaySync(_settings);
+            _npcSync = new NpcSync(_settings);
+            _devFreecam = new DevFreecam();
             _overlayVisible = _settings.OverlayEnabled.Value;
             _buildId = Application.version + "|" + Application.unityVersion;
             _modVersion = Info.Metadata.Version.ToString();
@@ -98,6 +108,7 @@ namespace MyWinterCarMpMod
             AllowMultipleInstances = _settings.AllowMultipleInstances.Value;
             DebugLog.SetVerbose(_settings.VerboseLogging.Value);
             HandleHotkeys();
+            UpdateDevTools();
             UpdateLanDiscovery();
 
             if (_transport != null)
@@ -137,6 +148,13 @@ namespace MyWinterCarMpMod
                 _timeSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
             }
 
+            if (_npcSync != null && _levelSync != null)
+            {
+                bool allowScan = !IsMainMenuScene();
+                _npcSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
+                _npcSync.Update(Time.realtimeSinceStartup);
+            }
+
             if (_settings.VerboseLogging.Value && _levelSync != null)
             {
                 bool allowScan = !IsMainMenuScene();
@@ -156,12 +174,39 @@ namespace MyWinterCarMpMod
             ApplyRemotePlayerState();
         }
 
+        private void FixedUpdate()
+        {
+            if (_vehicleSync == null || _settings == null)
+            {
+                return;
+            }
+
+            OwnerKind localOwner = OwnerKind.None;
+            if (_settings.Mode.Value == Mode.Host)
+            {
+                localOwner = OwnerKind.Host;
+            }
+            else if (_settings.Mode.Value == Mode.Client)
+            {
+                localOwner = OwnerKind.Client;
+            }
+
+            bool includeUnowned = localOwner == OwnerKind.Host;
+            _vehicleSync.FixedUpdate(Time.realtimeSinceStartup, Time.fixedDeltaTime, localOwner, includeUnowned);
+
+            if (_npcSync != null)
+            {
+                _npcSync.FixedUpdate(Time.realtimeSinceStartup, Time.fixedDeltaTime, localOwner);
+            }
+        }
+
         private void OnGUI()
         {
             OverlayState state = BuildOverlayState();
             _overlay.Draw(state);
             DrawMainMenuPanel();
             DrawLanPanel();
+            DrawDevMenuPanel();
         }
 
         private void OnDestroy()
@@ -199,6 +244,14 @@ namespace MyWinterCarMpMod
             {
                 _pickupSync.Clear();
             }
+            if (_npcSync != null)
+            {
+                _npcSync.Clear();
+            }
+            if (_devFreecam != null && _devFreecam.IsActive)
+            {
+                _devFreecam.Disable();
+            }
             if (_lanDiscovery != null)
             {
                 _lanDiscovery.Dispose();
@@ -217,6 +270,10 @@ namespace MyWinterCarMpMod
             if (Input.GetKeyDown(KeyCode.F8))
             {
                 _overlayVisible = !_overlayVisible;
+            }
+            if (_settings.DevMenuEnabled.Value && Input.GetKeyDown(KeyCode.F5))
+            {
+                _devMenuVisible = !_devMenuVisible;
             }
 
             if (_settings.Mode.Value == Mode.Host)
@@ -259,7 +316,7 @@ namespace MyWinterCarMpMod
             }
             ResetTransport();
             _transport = CreateTransport();
-            _hostSession = new HostSession(_transport, _settings, _levelSync, _doorSync, _vehicleSync, _pickupSync, _timeSync, Logger, _buildId, _modVersion);
+            _hostSession = new HostSession(_transport, _settings, _levelSync, _doorSync, _vehicleSync, _pickupSync, _timeSync, _npcSync, Logger, _buildId, _modVersion);
             _hostSession.Start();
             DebugLog.Info("Host started. Transport=" + _transport.Kind);
             if (_remoteAvatar != null)
@@ -288,7 +345,7 @@ namespace MyWinterCarMpMod
             }
             ResetTransport();
             _transport = CreateTransport();
-            _clientSession = new ClientSession(_transport, _settings, _levelSync, _doorSync, _vehicleSync, _pickupSync, _timeSync, Logger, _buildId, _modVersion);
+            _clientSession = new ClientSession(_transport, _settings, _levelSync, _doorSync, _vehicleSync, _pickupSync, _timeSync, _npcSync, Logger, _buildId, _modVersion);
             _clientSession.Connect();
             DebugLog.Info("Client connect requested. Transport=" + _transport.Kind);
             if (_remoteAvatar != null)
@@ -367,7 +424,11 @@ namespace MyWinterCarMpMod
 
                 if (_hostSession.HasClientState)
                 {
-                    _remoteAvatar.Update(_hostSession.LatestClientState, true, allowApply, _settings.GetSmoothingPosition(), _settings.GetSmoothingRotation());
+                    bool seatOverride;
+                    PlayerStateData state = ApplySeatOverride(_hostSession.LatestClientState, out seatOverride);
+                    float posSmooth = seatOverride ? 1f : _settings.GetSmoothingPosition();
+                    float rotSmooth = seatOverride ? 1f : _settings.GetSmoothingRotation();
+                    _remoteAvatar.Update(state, true, allowApply, posSmooth, rotSmooth);
                 }
             }
             else if (_settings.Mode.Value == Mode.Client)
@@ -380,12 +441,61 @@ namespace MyWinterCarMpMod
 
                 if (_clientSession.HasHostState)
                 {
-                    _remoteAvatar.Update(_clientSession.LatestHostState, true, allowApply, _settings.GetSmoothingPosition(), _settings.GetSmoothingRotation());
+                    bool seatOverride;
+                    PlayerStateData state = ApplySeatOverride(_clientSession.LatestHostState, out seatOverride);
+                    float posSmooth = seatOverride ? 1f : _settings.GetSmoothingPosition();
+                    float rotSmooth = seatOverride ? 1f : _settings.GetSmoothingRotation();
+                    _remoteAvatar.Update(state, true, allowApply, posSmooth, rotSmooth);
                 }
             }
             else
             {
                 _remoteAvatar.Clear();
+            }
+        }
+
+        private PlayerStateData ApplySeatOverride(PlayerStateData state, out bool seatOverride)
+        {
+            seatOverride = false;
+            if (_vehicleSync == null)
+            {
+                return state;
+            }
+
+            Transform seatTransform;
+            if (_vehicleSync.TryGetRemoteSeatTransform(out seatTransform) && seatTransform != null)
+            {
+                Vector3 seatPos = seatTransform.position;
+                state.PosX = seatPos.x;
+                state.PosY = seatPos.y;
+                state.PosZ = seatPos.z;
+                Quaternion seatRot = seatTransform.rotation;
+                state.ViewRotX = seatRot.x;
+                state.ViewRotY = seatRot.y;
+                state.ViewRotZ = seatRot.z;
+                state.ViewRotW = seatRot.w;
+                seatOverride = true;
+            }
+
+            return state;
+        }
+
+        private void UpdateDevTools()
+        {
+            if (!_settings.DevMenuEnabled.Value)
+            {
+                _devMenuVisible = false;
+                if (_devFreecam != null && _devFreecam.IsActive)
+                {
+                    _devFreecam.Disable();
+                }
+                return;
+            }
+
+            if (_devFreecam != null && _devFreecam.IsActive)
+            {
+                _devFreecam.MoveSpeed = _settings.DevFreecamSpeed.Value;
+                _devFreecam.Update();
             }
         }
 
@@ -622,6 +732,87 @@ namespace MyWinterCarMpMod
             GUILayout.EndArea();
         }
 
+        private void DrawDevMenuPanel()
+        {
+            if (!_settings.DevMenuEnabled.Value || !_devMenuVisible)
+            {
+                return;
+            }
+
+            float width = 260f;
+            float height = 230f;
+            float x = Screen.width - width - 10f;
+            float y = 10f;
+            if (x < 10f)
+            {
+                x = 10f;
+            }
+
+            Rect area = new Rect(x, y, width, height);
+            GUILayout.BeginArea(area, GUI.skin.box);
+            GUILayout.Label("Dev Menu");
+
+            bool freecamActive = _devFreecam != null && _devFreecam.IsActive;
+            bool nextFreecam = GUILayout.Toggle(freecamActive, "Freecam (RMB to look)", GUI.skin.button);
+            if (nextFreecam != freecamActive && _devFreecam != null)
+            {
+                if (nextFreecam)
+                {
+                    if (!_devFreecam.Enable(_settings.DevFreecamSpeed.Value))
+                    {
+                        _devStatus = "No usable camera for freecam.";
+                    }
+                }
+                else
+                {
+                    _devFreecam.Disable();
+                }
+            }
+
+            float speed = _settings.DevFreecamSpeed.Value;
+            GUILayout.Label("Freecam Speed: " + speed.ToString("0.0"));
+            float newSpeed = GUILayout.HorizontalSlider(speed, 0.5f, 20f);
+            if (Mathf.Abs(newSpeed - speed) > 0.01f)
+            {
+                _settings.DevFreecamSpeed.Value = newSpeed;
+                if (_devFreecam != null)
+                {
+                    _devFreecam.MoveSpeed = newSpeed;
+                }
+            }
+
+            bool inMenu = IsMainMenuScene();
+            GUI.enabled = !inMenu;
+            if (GUILayout.Button("Save Position"))
+            {
+                SaveDevPosition();
+            }
+            GUI.enabled = _devHasSavedPosition && !inMenu;
+            if (GUILayout.Button("Teleport to Saved"))
+            {
+                TeleportLocal(_devSavedPosition);
+            }
+            GUI.enabled = !inMenu;
+            string remoteLabel = (_settings.Mode.Value == Mode.Host) ? "Teleport to Client" : "Teleport to Host";
+            if (GUILayout.Button(remoteLabel))
+            {
+                TeleportToRemote();
+            }
+            GUI.enabled = true;
+
+            if (inMenu)
+            {
+                GUILayout.Label("Teleport disabled in main menu.");
+            }
+
+            if (!string.IsNullOrEmpty(_devStatus))
+            {
+                GUILayout.Label(_devStatus);
+            }
+
+            GUILayout.EndArea();
+        }
+
         private void ConnectLanHost(LanHostInfo host)
         {
             _settings.Mode.Value = Mode.Client;
@@ -635,6 +826,121 @@ namespace MyWinterCarMpMod
             }
 
             StartClient();
+        }
+
+        private void SaveDevPosition()
+        {
+            Vector3 position;
+            if (!TryGetLocalPosition(out position))
+            {
+                _devStatus = "Local player not found.";
+                return;
+            }
+
+            _devSavedPosition = position;
+            _devHasSavedPosition = true;
+            _devStatus = "Saved position.";
+        }
+
+        private void TeleportToRemote()
+        {
+            Vector3 position;
+            if (!TryGetRemotePosition(out position))
+            {
+                return;
+            }
+
+            TeleportLocal(position);
+        }
+
+        private void TeleportLocal(Vector3 position)
+        {
+            Transform body;
+            Transform view;
+            if (!_devPlayerLocator.TryGetLocalTransforms(out body, out view))
+            {
+                _devStatus = "Local player not found.";
+                return;
+            }
+
+            Rigidbody bodyRb = body != null ? body.GetComponent<Rigidbody>() : null;
+            if (bodyRb != null)
+            {
+                bodyRb.velocity = Vector3.zero;
+                bodyRb.angularVelocity = Vector3.zero;
+                bodyRb.position = position;
+            }
+
+            if (body != null)
+            {
+                body.position = position;
+            }
+            if (view != null && view != body)
+            {
+                view.position = position;
+            }
+
+            _devStatus = "Teleported.";
+        }
+
+        private bool TryGetLocalPosition(out Vector3 position)
+        {
+            Transform body;
+            Transform view;
+            if (!_devPlayerLocator.TryGetLocalTransforms(out body, out view))
+            {
+                position = Vector3.zero;
+                return false;
+            }
+
+            if (body != null)
+            {
+                position = body.position;
+                return true;
+            }
+            if (view != null)
+            {
+                position = view.position;
+                return true;
+            }
+
+            position = Vector3.zero;
+            return false;
+        }
+
+        private bool TryGetRemotePosition(out Vector3 position)
+        {
+            position = Vector3.zero;
+            if (_settings.Mode.Value == Mode.Host)
+            {
+                if (_hostSession == null || !_hostSession.HasClientState)
+                {
+                    _devStatus = "No client state yet.";
+                    return false;
+                }
+
+                PlayerStateData state = _hostSession.LatestClientState;
+                position = new Vector3(state.PosX, state.PosY, state.PosZ);
+                _devStatus = "Teleported to client.";
+                return true;
+            }
+
+            if (_settings.Mode.Value == Mode.Client)
+            {
+                if (_clientSession == null || !_clientSession.HasHostState)
+                {
+                    _devStatus = "No host state yet.";
+                    return false;
+                }
+
+                PlayerStateData state = _clientSession.LatestHostState;
+                position = new Vector3(state.PosX, state.PosY, state.PosZ);
+                _devStatus = "Teleported to host.";
+                return true;
+            }
+
+            _devStatus = "Teleport only available in host/client.";
+            return false;
         }
 
         private void DrawMainMenuPanel()

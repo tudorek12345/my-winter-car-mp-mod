@@ -43,6 +43,7 @@ namespace MyWinterCarMpMod.Sync
         private Transform _cachedView;
         private float _nextFailureLogTime;
         private float _nextResolveLogTime;
+        private float _nextFootLogTime;
         private int _cachedLevelIndex = int.MinValue;
         private string _cachedLevelName = string.Empty;
         private bool _readyThisScene;
@@ -95,6 +96,21 @@ namespace MyWinterCarMpMod.Sync
             }
 
             Vector3 pos = body.position;
+            float footY;
+            if (TryGetFootY(body, out footY))
+            {
+                pos.y = footY;
+                float now = Time.realtimeSinceStartup;
+                if (now >= _nextFootLogTime)
+                {
+                    DebugLog.Verbose("PlayerLocator: footY=" + footY.ToString("F3") +
+                        " bodyY=" + body.position.y.ToString("F3") +
+                        " viewY=" + (view != null ? view.position.y.ToString("F3") : "<null>") +
+                        " body=" + BuildPath(body) +
+                        " view=" + BuildPath(view));
+                    _nextFootLogTime = now + 1f;
+                }
+            }
             Quaternion viewRot = view.rotation;
             state.UnixTimeMs = GetUnixTimeMs();
             state.PosX = pos.x;
@@ -137,6 +153,79 @@ namespace MyWinterCarMpMod.Sync
             body = resolvedBody;
             view = resolvedView;
             return true;
+        }
+
+        private static bool TryGetFootY(Transform body, out float footY)
+        {
+            footY = 0f;
+            if (body == null)
+            {
+                return false;
+            }
+
+            const float footPad = 0.05f;
+            CharacterController controller = body.GetComponentInChildren<CharacterController>();
+            if (controller != null && controller.enabled)
+            {
+                footY = controller.bounds.min.y + footPad;
+                return true;
+            }
+
+            controller = body.GetComponentInParent<CharacterController>();
+            if (controller != null && controller.enabled)
+            {
+                footY = controller.bounds.min.y + footPad;
+                return true;
+            }
+
+            CapsuleCollider capsule = body.GetComponentInChildren<CapsuleCollider>();
+            if (capsule != null && capsule.enabled)
+            {
+                footY = capsule.bounds.min.y + footPad;
+                return true;
+            }
+
+            capsule = body.GetComponentInParent<CapsuleCollider>();
+            if (capsule != null && capsule.enabled)
+            {
+                footY = capsule.bounds.min.y + footPad;
+                return true;
+            }
+
+            Collider collider = body.GetComponentInChildren<Collider>();
+            if (collider != null && collider.enabled)
+            {
+                footY = collider.bounds.min.y + footPad;
+                return true;
+            }
+
+            collider = body.GetComponentInParent<Collider>();
+            if (collider != null && collider.enabled)
+            {
+                footY = collider.bounds.min.y + footPad;
+                return true;
+            }
+
+            return TryRaycastFootY(body, footPad, out footY);
+        }
+
+        private static bool TryRaycastFootY(Transform body, float footPad, out float footY)
+        {
+            footY = 0f;
+            if (body == null)
+            {
+                return false;
+            }
+
+            Vector3 origin = body.position + Vector3.up * 0.5f;
+            RaycastHit hit;
+            if (Physics.Raycast(origin, Vector3.down, out hit, 3f, ~0))
+            {
+                footY = hit.point.y + footPad;
+                return true;
+            }
+
+            return false;
         }
 
         private bool TryResolvePlayer(out Transform body, out Transform view)
@@ -213,6 +302,12 @@ namespace MyWinterCarMpMod.Sync
             }
 
             if (body == null && view == null)
+            {
+                LogFailure();
+                return false;
+            }
+
+            if (!IsLikelyPlayerTransform(body, view))
             {
                 LogFailure();
                 return false;
@@ -349,7 +444,7 @@ namespace MyWinterCarMpMod.Sync
                     return candidate;
                 }
 
-                if (best == null)
+                if (best == null && IsPlayerNameOrTag(candidate.transform))
                 {
                     best = candidate;
                 }
@@ -401,7 +496,7 @@ namespace MyWinterCarMpMod.Sync
             {
                 return false;
             }
-            return !IsMapCamera(cam) && !IsMenuCamera(cam);
+            return !IsMapCamera(cam) && !IsMenuCamera(cam) && !IsMirrorCamera(cam);
         }
 
         private static bool IsLikelyPlayerCamera(Camera cam)
@@ -446,10 +541,18 @@ namespace MyWinterCarMpMod.Sync
                 {
                     return true;
                 }
+                if (HasAnyComponentInChildren(body, PlayerBodyComponentNames))
+                {
+                    return true;
+                }
             }
 
             if (view != null)
             {
+                if (view.GetComponent<Camera>() != null)
+                {
+                    return true;
+                }
                 if (HasAnyComponentOnParents(view, PlayerCameraComponentNames))
                 {
                     return true;
@@ -458,6 +561,48 @@ namespace MyWinterCarMpMod.Sync
                 {
                     return true;
                 }
+                if (HasAnyComponentInChildren(view, PlayerCameraComponentNames))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsPlayerNameOrTag(Transform transform)
+        {
+            if (transform == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                if (transform.CompareTag("Player"))
+                {
+                    return true;
+                }
+            }
+            catch (UnityException)
+            {
+            }
+
+            if (NameContains(transform.name, "player"))
+            {
+                return true;
+            }
+
+            Transform current = transform.parent;
+            int depth = 0;
+            while (current != null && depth < 4)
+            {
+                if (NameContains(current.name, "player"))
+                {
+                    return true;
+                }
+                current = current.parent;
+                depth++;
             }
 
             return false;
@@ -477,6 +622,45 @@ namespace MyWinterCarMpMod.Sync
                     return true;
                 }
             }
+            return false;
+        }
+
+        private static bool HasAnyComponentInChildren(Transform transform, string[] typeNames)
+        {
+            if (transform == null)
+            {
+                return false;
+            }
+
+            Component[] components = transform.GetComponentsInChildren<Component>(true);
+            if (components == null || components.Length == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component component = components[i];
+                if (component == null)
+                {
+                    continue;
+                }
+
+                string typeName = component.GetType().FullName;
+                if (string.IsNullOrEmpty(typeName))
+                {
+                    continue;
+                }
+
+                for (int n = 0; n < typeNames.Length; n++)
+                {
+                    if (string.Equals(typeName, typeNames[n], StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+            }
+
             return false;
         }
 
@@ -558,6 +742,30 @@ namespace MyWinterCarMpMod.Sync
                     }
                 }
                 if (current.GetComponent("StartGame") != null || current.GetComponent("SettingsMenu") != null)
+                {
+                    return true;
+                }
+                current = current.parent;
+                depth++;
+            }
+
+            return false;
+        }
+
+        private static bool IsMirrorCamera(Camera cam)
+        {
+            if (cam == null)
+            {
+                return false;
+            }
+
+            Transform current = cam.transform;
+            int depth = 0;
+            while (current != null && depth < 6)
+            {
+                string name = current.name;
+                if (!string.IsNullOrEmpty(name) &&
+                    name.IndexOf("mirror", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     return true;
                 }

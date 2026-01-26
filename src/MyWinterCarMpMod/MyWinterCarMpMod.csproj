@@ -10,6 +10,10 @@
     <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
   </PropertyGroup>
+  <PropertyGroup Condition=" '$(TargetFrameworkVersion)' == 'v3.5' ">
+    <LocalNetFxRefPath>$(MSBuildProjectDirectory)\..\..\tools\netfx-ref\Microsoft.NETFramework.ReferenceAssemblies.net35.1.0.3\build\.NETFramework\v3.5</LocalNetFxRefPath>
+    <FrameworkPathOverride Condition=" '$(FrameworkPathOverride)' == '' and Exists('$(LocalNetFxRefPath)') ">$(LocalNetFxRefPath)</FrameworkPathOverride>
+  </PropertyGroup>
 
   <PropertyGroup>
     <GameDir Condition=" '$(GameDir)' == '' ">C:\Games\My.Winter.Car\game</GameDir>
@@ -63,6 +67,10 @@
       <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="cInput">
+      <HintPath>$(ManagedDir)\cInput.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="PlayMaker">
       <HintPath>$(ManagedDir)\PlayMaker.dll</HintPath>
       <Private>False</Private>
@@ -83,16 +91,20 @@
     <Compile Include="Sync\CameraFollower.cs" />
     <Compile Include="Sync\DoorSync.cs" />
     <Compile Include="Sync\LevelSync.cs" />
+    <Compile Include="Sync\NpcSync.cs" />
     <Compile Include="Sync\ObjectRegistry.cs" />
     <Compile Include="Sync\PickupSync.cs" />
     <Compile Include="Sync\PlayMakerBridge.cs" />
     <Compile Include="Sync\PlayMakerScanner.cs" />
     <Compile Include="Sync\PlayerLocator.cs" />
+    <Compile Include="Sync\PassengerSeatTrigger.cs" />
+    <Compile Include="Sync\MPCarController.cs" />
     <Compile Include="Sync\RemotePlayerAvatar.cs" />
     <Compile Include="Sync\TimeOfDaySync.cs" />
     <Compile Include="Sync\VehicleSync.cs" />
     <Compile Include="UI\Overlay.cs" />
     <Compile Include="Util\MainThreadDispatcher.cs" />
+    <Compile Include="Util\DevFreecam.cs" />
     <Compile Include="Util\DebugLog.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

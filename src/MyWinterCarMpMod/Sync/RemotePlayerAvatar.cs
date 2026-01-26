@@ -79,14 +79,18 @@ namespace MyWinterCarMpMod.Sync
             _avatar = new GameObject("MWC Remote Player");
             Object.DontDestroyOnLoad(_avatar);
 
-            bool meshLoaded = TryCreateMeshAvatar(_avatar.transform);
+            Transform modelRoot = new GameObject("AvatarModel").transform;
+            modelRoot.SetParent(_avatar.transform, false);
+
+            bool meshLoaded = TryCreateMeshAvatar(modelRoot);
             if (!meshLoaded)
             {
-                CreatePrimitiveChild(_avatar.transform, "Body", PrimitiveType.Capsule, new Vector3(0f, 0.9f, 0f), new Vector3(0.45f, 0.9f, 0.45f));
-                CreatePrimitiveChild(_avatar.transform, "Head", PrimitiveType.Sphere, new Vector3(0f, 1.55f, 0f), new Vector3(0.3f, 0.3f, 0.3f));
-                CreatePrimitiveChild(_avatar.transform, "Hip", PrimitiveType.Cube, new Vector3(0f, 0.55f, 0f), new Vector3(0.35f, 0.2f, 0.25f));
-                CreatePrimitiveChild(_avatar.transform, "ArmL", PrimitiveType.Cube, new Vector3(-0.3f, 1.1f, 0f), new Vector3(0.15f, 0.45f, 0.15f));
-                CreatePrimitiveChild(_avatar.transform, "ArmR", PrimitiveType.Cube, new Vector3(0.3f, 1.1f, 0f), new Vector3(0.15f, 0.45f, 0.15f));
+                CreatePrimitiveChild(modelRoot, "Body", PrimitiveType.Capsule, new Vector3(0f, 0.9f, 0f), new Vector3(0.45f, 0.9f, 0.45f));
+                CreatePrimitiveChild(modelRoot, "Head", PrimitiveType.Sphere, new Vector3(0f, 1.55f, 0f), new Vector3(0.3f, 0.3f, 0.3f));
+                CreatePrimitiveChild(modelRoot, "Hip", PrimitiveType.Cube, new Vector3(0f, 0.55f, 0f), new Vector3(0.35f, 0.2f, 0.25f));
+                CreatePrimitiveChild(modelRoot, "ArmL", PrimitiveType.Cube, new Vector3(-0.3f, 1.1f, 0f), new Vector3(0.15f, 0.45f, 0.15f));
+                CreatePrimitiveChild(modelRoot, "ArmR", PrimitiveType.Cube, new Vector3(0.3f, 1.1f, 0f), new Vector3(0.15f, 0.45f, 0.15f));
+                ApplyAvatarTransform(modelRoot);
             }
 
             _renderers = _avatar.GetComponentsInChildren<Renderer>(true);
@@ -220,7 +224,9 @@ namespace MyWinterCarMpMod.Sync
             transform.localPosition = Vector3.zero;
 
             float autoOffset = ComputeAutoYOffset(transform);
-            transform.localPosition = new Vector3(0f, yOffset + autoOffset, 0f);
+            float finalYOffset = yOffset + autoOffset;
+            DebugLog.Info("Avatar transform scale=" + scale + " yOffset=" + yOffset + " autoYOffset=" + autoOffset + " finalYOffset=" + finalYOffset);
+            transform.localPosition = new Vector3(0f, finalYOffset, 0f);
         }
 
         private static float ComputeAutoYOffset(Transform root)
@@ -253,12 +259,67 @@ namespace MyWinterCarMpMod.Sync
 
             if (!found)
             {
+                Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+                for (int i = 0; i < renderers.Length; i++)
+                {
+                    Renderer renderer = renderers[i];
+                    if (renderer == null)
+                    {
+                        continue;
+                    }
+                    UpdateRendererBounds(root, renderer, ref minY, ref maxY, ref found);
+                }
+            }
+
+            if (!found)
+            {
                 return 0f;
             }
 
-            float autoOffset = -minY;
-            DebugLog.Verbose("Avatar mesh bounds minY=" + minY + " maxY=" + maxY + " height=" + (maxY - minY) + " autoYOffset=" + autoOffset);
+            const float footPad = 0.06f;
+            const float extraPad = 0.02f;
+            float autoOffset = -minY + footPad + extraPad;
+            DebugLog.Info("Avatar mesh bounds minY=" + minY + " maxY=" + maxY + " height=" + (maxY - minY) +
+                " footPad=" + footPad + " extraPad=" + extraPad + " autoYOffset=" + autoOffset);
             return autoOffset;
+        }
+
+        private static void UpdateRendererBounds(Transform root, Renderer renderer, ref float minY, ref float maxY, ref bool found)
+        {
+            if (root == null || renderer == null)
+            {
+                return;
+            }
+
+            Bounds bounds = renderer.bounds;
+            Vector3 min = bounds.min;
+            Vector3 max = bounds.max;
+            Vector3[] corners = new Vector3[]
+            {
+                new Vector3(min.x, min.y, min.z),
+                new Vector3(min.x, min.y, max.z),
+                new Vector3(min.x, max.y, min.z),
+                new Vector3(min.x, max.y, max.z),
+                new Vector3(max.x, min.y, min.z),
+                new Vector3(max.x, min.y, max.z),
+                new Vector3(max.x, max.y, min.z),
+                new Vector3(max.x, max.y, max.z)
+            };
+
+            for (int i = 0; i < corners.Length; i++)
+            {
+                Vector3 local = root.InverseTransformPoint(corners[i]);
+                float y = local.y;
+                if (y < minY)
+                {
+                    minY = y;
+                }
+                if (y > maxY)
+                {
+                    maxY = y;
+                }
+                found = true;
+            }
         }
 
         private static void UpdateMeshBounds(Transform root, Transform meshTransform, Mesh mesh, ref float minY, ref float maxY, ref bool found)

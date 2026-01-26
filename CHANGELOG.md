@@ -1,8 +1,15 @@
 # Changelog
 
+## 0.1.6 - 2026-01-26
+- Sorbet scrape state sync + initial snapshot on join to align frost state.
+- Sorbet dashboard/HVAC replication (heater temp/blower/direction/window heater/lights/hazard), including state-index apply.
+- Passenger seat snapping (position + rotation) to reduce in-car avatar lag.
+- NPC/traffic scanning upgraded with delayed rescans and candidate dumps for filter tuning.
+- Updated default NPC vehicle filter to include bus/taxi/truck/van.
+
 ## 0.1.5 - 2026-01-14
 - Remote avatar now loads the MWCMP mpdata AssetBundle by default (Unity 5.0.0f4 build).
-- Added auto-ground offset using mesh bounds and tuned scale defaults (Scale 3.5, YOffset 0.6).
+- Added auto-ground offset using mesh bounds and tuned scale defaults (Scale 3.8, YOffset 0.85).
 - Cabin sink/tap and fridge interactions sync.
 - Sorbet vehicle sync is still WIP: doors almot complete, driving/ownership working but clunky - still in progress.
 

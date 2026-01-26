@@ -26,14 +26,20 @@ namespace MyWinterCarMpMod.Net
         WorldState = 18,
         WorldStateAck = 19,
         DoorHingeState = 20,
-        TimeState = 21
+        TimeState = 21,
+        VehicleControl = 22,
+        NpcState = 23,
+        VehicleSeat = 24,
+        ScrapeState = 25,
+        SorbetDashboardState = 26
     }
 
     public enum SyncObjectKind : byte
     {
         Door = 1,
         Vehicle = 2,
-        Pickup = 3
+        Pickup = 3,
+        Npc = 4
     }
 
     public enum OwnershipAction : byte
@@ -175,6 +181,40 @@ namespace MyWinterCarMpMod.Net
         public uint Sequence;
         public uint DoorId;
         public byte Open;
+        public string EventName;
+    }
+
+    public struct ScrapeStateData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public long UnixTimeMs;
+        public uint DoorId;
+        public int Layer;
+        public float X;
+        public float Xold;
+        public float Distance;
+    }
+
+    public struct SorbetDashboardStateData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public long UnixTimeMs;
+        public uint VehicleId;
+        public byte Mask;
+        public byte HeaterTempKind;
+        public float HeaterTempValue;
+        public byte HeaterBlowerKind;
+        public float HeaterBlowerValue;
+        public byte HeaterDirectionKind;
+        public float HeaterDirectionValue;
+        public byte WindowHeaterKind;
+        public float WindowHeaterValue;
+        public byte LightModesKind;
+        public float LightModesValue;
+        public byte HazardKind;
+        public float HazardValue;
     }
 
     public struct VehicleStateData
@@ -196,6 +236,56 @@ namespace MyWinterCarMpMod.Net
         public float AngVelX;
         public float AngVelY;
         public float AngVelZ;
+        public float Steer;
+        public int Gear;
+        public float EngineRpm;
+    }
+
+    public struct VehicleControlData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public long UnixTimeMs;
+        public uint VehicleId;
+        public float Throttle;
+        public float Brake;
+        public float Steer;
+        public float Handbrake;
+        public float Clutch;
+        public int TargetGear;
+        public byte Flags;
+    }
+
+    public struct VehicleSeatData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public long UnixTimeMs;
+        public uint VehicleId;
+        public byte SeatRole;
+        public byte InSeat;
+    }
+
+    public struct NpcStateData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public long UnixTimeMs;
+        public uint NpcId;
+        public float PosX;
+        public float PosY;
+        public float PosZ;
+        public float RotX;
+        public float RotY;
+        public float RotZ;
+        public float RotW;
+        public float VelX;
+        public float VelY;
+        public float VelZ;
+        public float AngVelX;
+        public float AngVelY;
+        public float AngVelZ;
+        public byte Flags;
     }
 
     public struct PickupStateData
@@ -237,6 +327,7 @@ namespace MyWinterCarMpMod.Net
         public DoorHingeStateData[] DoorHinges;
         public VehicleStateData[] Vehicles;
         public PickupStateData[] Pickups;
+        public NpcStateData[] Npcs;
         public OwnershipUpdateData[] Ownership;
     }
 
@@ -257,8 +348,13 @@ namespace MyWinterCarMpMod.Net
         public DoorStateData DoorState;
         public DoorHingeStateData DoorHingeState;
         public DoorEventData DoorEvent;
+        public ScrapeStateData ScrapeState;
+        public SorbetDashboardStateData SorbetDashboardState;
         public TimeStateData TimeState;
         public VehicleStateData VehicleState;
+        public VehicleControlData VehicleControl;
+        public VehicleSeatData VehicleSeat;
+        public NpcStateData NpcState;
         public PickupStateData PickupState;
         public OwnershipRequestData OwnershipRequest;
         public OwnershipUpdateData OwnershipUpdate;
@@ -268,7 +364,7 @@ namespace MyWinterCarMpMod.Net
     public static class Protocol
     {
         public const uint Magic = 0x4D575331;
-        public const ushort Version = 8;
+        public const ushort Version = 13;
         private const int MaxStringBytes = 4096;
         private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
@@ -461,7 +557,7 @@ namespace MyWinterCarMpMod.Net
 
         public static byte[] BuildDoorEvent(DoorEventData state)
         {
-            using (MemoryStream stream = new MemoryStream(32))
+            using (MemoryStream stream = new MemoryStream(64))
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 WriteHeader(writer, MessageType.DoorEvent);
@@ -469,6 +565,60 @@ namespace MyWinterCarMpMod.Net
                 writer.Write(state.Sequence);
                 writer.Write(state.DoorId);
                 writer.Write(state.Open);
+                if (!string.IsNullOrEmpty(state.EventName))
+                {
+                    writer.Write((byte)1);
+                    writer.Write(state.EventName);
+                }
+                else
+                {
+                    writer.Write((byte)0);
+                }
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildScrapeState(ScrapeStateData state)
+        {
+            using (MemoryStream stream = new MemoryStream(48))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.ScrapeState);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
+                writer.Write(state.UnixTimeMs);
+                writer.Write(state.DoorId);
+                writer.Write(state.Layer);
+                writer.Write(state.X);
+                writer.Write(state.Xold);
+                writer.Write(state.Distance);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildSorbetDashboardState(SorbetDashboardStateData state)
+        {
+            using (MemoryStream stream = new MemoryStream(96))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.SorbetDashboardState);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
+                writer.Write(state.UnixTimeMs);
+                writer.Write(state.VehicleId);
+                writer.Write(state.Mask);
+                writer.Write(state.HeaterTempKind);
+                writer.Write(state.HeaterTempValue);
+                writer.Write(state.HeaterBlowerKind);
+                writer.Write(state.HeaterBlowerValue);
+                writer.Write(state.HeaterDirectionKind);
+                writer.Write(state.HeaterDirectionValue);
+                writer.Write(state.WindowHeaterKind);
+                writer.Write(state.WindowHeaterValue);
+                writer.Write(state.LightModesKind);
+                writer.Write(state.LightModesValue);
+                writer.Write(state.HazardKind);
+                writer.Write(state.HazardValue);
                 return stream.ToArray();
             }
         }
@@ -497,7 +647,7 @@ namespace MyWinterCarMpMod.Net
 
         public static byte[] BuildVehicleState(VehicleStateData state)
         {
-            using (MemoryStream stream = new MemoryStream(96))
+            using (MemoryStream stream = new MemoryStream(100))
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 WriteHeader(writer, MessageType.VehicleState);
@@ -518,6 +668,74 @@ namespace MyWinterCarMpMod.Net
                 writer.Write(state.AngVelX);
                 writer.Write(state.AngVelY);
                 writer.Write(state.AngVelZ);
+                writer.Write(state.Steer);
+                writer.Write(state.Gear);
+                writer.Write(state.EngineRpm);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildNpcState(NpcStateData state)
+        {
+            using (MemoryStream stream = new MemoryStream(96))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.NpcState);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
+                writer.Write(state.UnixTimeMs);
+                writer.Write(state.NpcId);
+                writer.Write(state.PosX);
+                writer.Write(state.PosY);
+                writer.Write(state.PosZ);
+                writer.Write(state.RotX);
+                writer.Write(state.RotY);
+                writer.Write(state.RotZ);
+                writer.Write(state.RotW);
+                writer.Write(state.VelX);
+                writer.Write(state.VelY);
+                writer.Write(state.VelZ);
+                writer.Write(state.AngVelX);
+                writer.Write(state.AngVelY);
+                writer.Write(state.AngVelZ);
+                writer.Write(state.Flags);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildVehicleControl(VehicleControlData control)
+        {
+            using (MemoryStream stream = new MemoryStream(64))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.VehicleControl);
+                writer.Write(control.SessionId);
+                writer.Write(control.Sequence);
+                writer.Write(control.UnixTimeMs);
+                writer.Write(control.VehicleId);
+                writer.Write(control.Throttle);
+                writer.Write(control.Brake);
+                writer.Write(control.Steer);
+                writer.Write(control.Handbrake);
+                writer.Write(control.Clutch);
+                writer.Write(control.TargetGear);
+                writer.Write(control.Flags);
+                return stream.ToArray();
+            }
+        }
+
+        public static byte[] BuildVehicleSeat(VehicleSeatData state)
+        {
+            using (MemoryStream stream = new MemoryStream(32))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.VehicleSeat);
+                writer.Write(state.SessionId);
+                writer.Write(state.Sequence);
+                writer.Write(state.UnixTimeMs);
+                writer.Write(state.VehicleId);
+                writer.Write(state.SeatRole);
+                writer.Write(state.InSeat);
                 return stream.ToArray();
             }
         }
@@ -583,6 +801,7 @@ namespace MyWinterCarMpMod.Net
                 WriteDoorHingeStateList(writer, state.DoorHinges);
                 WriteVehicleStateList(writer, state.Vehicles);
                 WritePickupStateList(writer, state.Pickups);
+                WriteNpcStateList(writer, state.Npcs);
                 WriteOwnershipList(writer, state.Ownership);
                 return stream.ToArray();
             }
@@ -775,12 +994,56 @@ namespace MyWinterCarMpMod.Net
                             };
                             break;
                         case MessageType.DoorEvent:
-                            result.DoorEvent = new DoorEventData
+                            DoorEventData doorEvent = new DoorEventData
                             {
                                 SessionId = reader.ReadUInt32(),
                                 Sequence = reader.ReadUInt32(),
                                 DoorId = reader.ReadUInt32(),
                                 Open = reader.ReadByte()
+                            };
+                            if (reader.BaseStream.Position < reader.BaseStream.Length)
+                            {
+                                byte hasEvent = reader.ReadByte();
+                                if (hasEvent != 0 && reader.BaseStream.Position < reader.BaseStream.Length)
+                                {
+                                    doorEvent.EventName = reader.ReadString();
+                                }
+                            }
+                            result.DoorEvent = doorEvent;
+                            break;
+                        case MessageType.ScrapeState:
+                            result.ScrapeState = new ScrapeStateData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64(),
+                                DoorId = reader.ReadUInt32(),
+                                Layer = reader.ReadInt32(),
+                                X = reader.ReadSingle(),
+                                Xold = reader.ReadSingle(),
+                                Distance = reader.ReadSingle()
+                            };
+                            break;
+                        case MessageType.SorbetDashboardState:
+                            result.SorbetDashboardState = new SorbetDashboardStateData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64(),
+                                VehicleId = reader.ReadUInt32(),
+                                Mask = reader.ReadByte(),
+                                HeaterTempKind = reader.ReadByte(),
+                                HeaterTempValue = reader.ReadSingle(),
+                                HeaterBlowerKind = reader.ReadByte(),
+                                HeaterBlowerValue = reader.ReadSingle(),
+                                HeaterDirectionKind = reader.ReadByte(),
+                                HeaterDirectionValue = reader.ReadSingle(),
+                                WindowHeaterKind = reader.ReadByte(),
+                                WindowHeaterValue = reader.ReadSingle(),
+                                LightModesKind = reader.ReadByte(),
+                                LightModesValue = reader.ReadSingle(),
+                                HazardKind = reader.ReadByte(),
+                                HazardValue = reader.ReadSingle()
                             };
                             break;
                         case MessageType.VehicleState:
@@ -802,7 +1065,60 @@ namespace MyWinterCarMpMod.Net
                                 VelZ = reader.ReadSingle(),
                                 AngVelX = reader.ReadSingle(),
                                 AngVelY = reader.ReadSingle(),
-                                AngVelZ = reader.ReadSingle()
+                                AngVelZ = reader.ReadSingle(),
+                                Steer = reader.ReadSingle(),
+                                Gear = reader.ReadInt32(),
+                                EngineRpm = reader.ReadSingle()
+                            };
+                            break;
+                        case MessageType.VehicleControl:
+                            result.VehicleControl = new VehicleControlData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64(),
+                                VehicleId = reader.ReadUInt32(),
+                                Throttle = reader.ReadSingle(),
+                                Brake = reader.ReadSingle(),
+                                Steer = reader.ReadSingle(),
+                                Handbrake = reader.ReadSingle(),
+                                Clutch = reader.ReadSingle(),
+                                TargetGear = reader.ReadInt32(),
+                                Flags = reader.ReadByte()
+                            };
+                            break;
+                        case MessageType.VehicleSeat:
+                            result.VehicleSeat = new VehicleSeatData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64(),
+                                VehicleId = reader.ReadUInt32(),
+                                SeatRole = reader.ReadByte(),
+                                InSeat = reader.ReadByte()
+                            };
+                            break;
+                        case MessageType.NpcState:
+                            result.NpcState = new NpcStateData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64(),
+                                NpcId = reader.ReadUInt32(),
+                                PosX = reader.ReadSingle(),
+                                PosY = reader.ReadSingle(),
+                                PosZ = reader.ReadSingle(),
+                                RotX = reader.ReadSingle(),
+                                RotY = reader.ReadSingle(),
+                                RotZ = reader.ReadSingle(),
+                                RotW = reader.ReadSingle(),
+                                VelX = reader.ReadSingle(),
+                                VelY = reader.ReadSingle(),
+                                VelZ = reader.ReadSingle(),
+                                AngVelX = reader.ReadSingle(),
+                                AngVelY = reader.ReadSingle(),
+                                AngVelZ = reader.ReadSingle(),
+                                Flags = reader.ReadByte()
                             };
                             break;
                         case MessageType.PickupState:
@@ -848,6 +1164,7 @@ namespace MyWinterCarMpMod.Net
                                 DoorHinges = ReadDoorHingeStateList(reader),
                                 Vehicles = ReadVehicleStateList(reader),
                                 Pickups = ReadPickupStateList(reader),
+                                Npcs = ReadNpcStateList(reader),
                                 Ownership = ReadOwnershipList(reader)
                             };
                             break;
@@ -888,11 +1205,26 @@ namespace MyWinterCarMpMod.Net
                         case MessageType.DoorEvent:
                             result.SessionId = result.DoorEvent.SessionId;
                             break;
+                        case MessageType.ScrapeState:
+                            result.SessionId = result.ScrapeState.SessionId;
+                            break;
+                        case MessageType.SorbetDashboardState:
+                            result.SessionId = result.SorbetDashboardState.SessionId;
+                            break;
                         case MessageType.TimeState:
                             result.SessionId = result.TimeState.SessionId;
                             break;
                         case MessageType.VehicleState:
                             result.SessionId = result.VehicleState.SessionId;
+                            break;
+                        case MessageType.VehicleControl:
+                            result.SessionId = result.VehicleControl.SessionId;
+                            break;
+                        case MessageType.VehicleSeat:
+                            result.SessionId = result.VehicleSeat.SessionId;
+                            break;
+                        case MessageType.NpcState:
+                            result.SessionId = result.NpcState.SessionId;
                             break;
                         case MessageType.PickupState:
                             result.SessionId = result.PickupState.SessionId;
@@ -958,6 +1290,20 @@ namespace MyWinterCarMpMod.Net
             for (int i = 0; i < states.Length; i++)
             {
                 WriteVehicleState(writer, states[i]);
+            }
+        }
+
+        private static void WriteNpcStateList(BinaryWriter writer, NpcStateData[] states)
+        {
+            if (states == null)
+            {
+                writer.Write(0);
+                return;
+            }
+            writer.Write(states.Length);
+            for (int i = 0; i < states.Length; i++)
+            {
+                WriteNpcState(writer, states[i]);
             }
         }
 
@@ -1034,6 +1380,21 @@ namespace MyWinterCarMpMod.Net
             return states;
         }
 
+        private static NpcStateData[] ReadNpcStateList(BinaryReader reader)
+        {
+            int count = ReadCount(reader);
+            if (count == 0)
+            {
+                return new NpcStateData[0];
+            }
+            NpcStateData[] states = new NpcStateData[count];
+            for (int i = 0; i < count; i++)
+            {
+                states[i] = ReadNpcState(reader);
+            }
+            return states;
+        }
+
         private static PickupStateData[] ReadPickupStateList(BinaryReader reader)
         {
             int count = ReadCount(reader);
@@ -1104,6 +1465,31 @@ namespace MyWinterCarMpMod.Net
             writer.Write(state.AngVelX);
             writer.Write(state.AngVelY);
             writer.Write(state.AngVelZ);
+            writer.Write(state.Steer);
+            writer.Write(state.Gear);
+            writer.Write(state.EngineRpm);
+        }
+
+        private static void WriteNpcState(BinaryWriter writer, NpcStateData state)
+        {
+            writer.Write(state.SessionId);
+            writer.Write(state.Sequence);
+            writer.Write(state.UnixTimeMs);
+            writer.Write(state.NpcId);
+            writer.Write(state.PosX);
+            writer.Write(state.PosY);
+            writer.Write(state.PosZ);
+            writer.Write(state.RotX);
+            writer.Write(state.RotY);
+            writer.Write(state.RotZ);
+            writer.Write(state.RotW);
+            writer.Write(state.VelX);
+            writer.Write(state.VelY);
+            writer.Write(state.VelZ);
+            writer.Write(state.AngVelX);
+            writer.Write(state.AngVelY);
+            writer.Write(state.AngVelZ);
+            writer.Write(state.Flags);
         }
 
         private static void WritePickupState(BinaryWriter writer, PickupStateData state)
@@ -1177,7 +1563,35 @@ namespace MyWinterCarMpMod.Net
                 VelZ = reader.ReadSingle(),
                 AngVelX = reader.ReadSingle(),
                 AngVelY = reader.ReadSingle(),
-                AngVelZ = reader.ReadSingle()
+                AngVelZ = reader.ReadSingle(),
+                Steer = reader.ReadSingle(),
+                Gear = reader.ReadInt32(),
+                EngineRpm = reader.ReadSingle()
+            };
+        }
+
+        private static NpcStateData ReadNpcState(BinaryReader reader)
+        {
+            return new NpcStateData
+            {
+                SessionId = reader.ReadUInt32(),
+                Sequence = reader.ReadUInt32(),
+                UnixTimeMs = reader.ReadInt64(),
+                NpcId = reader.ReadUInt32(),
+                PosX = reader.ReadSingle(),
+                PosY = reader.ReadSingle(),
+                PosZ = reader.ReadSingle(),
+                RotX = reader.ReadSingle(),
+                RotY = reader.ReadSingle(),
+                RotZ = reader.ReadSingle(),
+                RotW = reader.ReadSingle(),
+                VelX = reader.ReadSingle(),
+                VelY = reader.ReadSingle(),
+                VelZ = reader.ReadSingle(),
+                AngVelX = reader.ReadSingle(),
+                AngVelY = reader.ReadSingle(),
+                AngVelZ = reader.ReadSingle(),
+                Flags = reader.ReadByte()
             };
         }
 

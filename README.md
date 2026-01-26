@@ -3,22 +3,26 @@
 
 
 ## Current Status
-Host and client can connect in-game and both see each other using the MWCMP model avatar (static mesh, scaled and grounded). Interior room doors plus the cabin front/back entrances sync. Cabin sink/tap and fridge interactions sync. Time-of-day lighting sync is working. The Sorbet car is in active development: doors sync complete, driving/ownership is still WIP.
+Host and client can connect in-game and both see each other using the MWCMP model avatar (static mesh, scaled and grounded). Interior room doors plus the cabin front/back entrances sync. Cabin sink/tap and fridge interactions sync. Time-of-day lighting sync is working. The Sorbet car is in active development: doors sync complete, driving/ownership is working, scrape + dashboard/HVAC sync is in place, and passenger seat snapping reduces in-car lag. NPC/traffic sync still needs tuning (name filters and late-spawn detection), and pickupable items are still WIP.
 
 OFFICIAL DISCORD
 https://discord.gg/GQeC5tCH2w
 
 ## Current Version [STATUS]
-0.1.5 - 2026-01-14
+0.1.6 - 2026-01-26
 MWCMP avatar bundle integrated with auto-grounding; scale/offset tuned (still configurable).
 Cabin sink/tap and fridge interactions sync.
-Sorbet vehicle sync is still WIP: doors sync for both players, driving/ownership still in progress.
+Sorbet vehicle sync is still WIP: doors sync for both players, driving/ownership working, dashboard/HVAC + scrape replication added.
 
 ## Recent Progress
 - Swapped the blue capsule for the MWCMP model avatar (static mesh) with grounding and scale tuning.
 - Cabin door sync stabilized (room doors + front/back cabin entrances).
 - Sink/tap and fridge interactions now replicate.
 - Time-of-day lighting replication verified across host/client.
+- Sorbet scrape state replication + startup snapshot to align frost state on join.
+- Sorbet dashboard/HVAC state replication (heater temp/blower/direction/window heater/lights/hazard).
+- Passenger seat snapping (pos + rot) to reduce in-car lag for remote avatars.
+- NPC/traffic scanning upgraded with delayed rescans and candidate dumps for filter tuning.
 
 
 ## Requirements
@@ -105,8 +109,8 @@ VehicleSync:
 Avatar:
 - `BundlePath = plugins\MyWinterCarMpMod\mpdata`
 - `AssetName = assets/mpplayermodel/mpplayermodel.fbx`
-- `Scale = 3.5` (tune)
-- `YOffset = 0.6` (tune)
+- `Scale = 3.8` (tune)
+- `YOffset = 0.85` (tune)
 
 Networking:
 - `ConnectionTimeoutSeconds = 10`

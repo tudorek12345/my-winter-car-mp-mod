@@ -17,28 +17,46 @@ namespace MyWinterCarMpMod.Sync
         private const float LocalHoldSeconds = 0.15f;
         private const float RemoteSuppressSeconds = 0.2f;
         private const float RemoteApplySeconds = 0.35f;
+        private const float VehicleHingeDeadzone = 3f;
         private static readonly string[] DoorTokens = new[]
         {
-            "door", "ovi", "hatch", "boot", "lid", "gate", "fridge", "freezer", "refrigerator", "icebox"
+            "door", "ovi", "hatch", "hatchback", "boot", "bootlid", "lid", "gate", "trunk", "hood", "bonnet", "fridge", "freezer", "refrigerator", "icebox"
         };
         private static readonly string[] DoorStateTokens = new[] { "Open", "Close" };
-        private static readonly string[] TapTokens = new[] { "tap", "faucet", "sink" };
+        private static readonly string[] TapTokens = new[]
+        {
+            "tap", "faucet", "sink", "ignition", "starter", "engine", "key",
+            "wiper", "wipers", "light", "lights", "headlight", "headlights", "lamp", "beam",
+            "indicator", "signal", "turn", "hazard",
+            "scrape", "scraper", "defrost", "defog", "heater", "fan", "blower"
+        };
         private static readonly string[] PhoneTokens = new[] { "phone", "telephone" };
         private static readonly string[] FridgeTokens = new[] { "fridge", "freezer", "refrigerator", "icebox" };
-        private static readonly string[] TapOpenTokens = new[] { "on" };
-        private static readonly string[] TapCloseTokens = new[] { "off" };
+        private static readonly string[] TapOpenTokens = new[] { "on", "enable", "start", "down", "scrape" };
+        private static readonly string[] TapCloseTokens = new[] { "off", "disable", "stop", "up" };
         private static readonly string[] PhoneOpenTokens = new[] { "pick", "answer", "open" };
         private static readonly string[] PhoneCloseTokens = new[] { "close", "hang", "put", "off" };
-        private static readonly string[] TapEventTokensOn = new[] { "on" };
-        private static readonly string[] TapEventTokensOff = new[] { "off" };
+        private static readonly string[] TapEventTokensOn = new[] { "on", "enable", "start", "toggle", "down", "scrape", "use", "press", "click", "cycle", "next", "inc", "increase", "plus" };
+        private static readonly string[] TapEventTokensOff = new[] { "off", "disable", "stop", "up", "dec", "decrease", "minus", "prev", "previous" };
+        private static readonly string[] TapEventExactTokens = new[]
+        {
+            "ON", "OFF", "USE", "DOWN", "UP", "SCRAPE", "START", "STOP", "ENABLE", "DISABLE",
+            "PRESS", "CLICK", "CYCLE", "NEXT", "INC", "DEC", "PLUS", "MINUS"
+        };
         private static readonly string[] PhoneEventTokensOpen = new[] { "pick", "answer", "open" };
         private static readonly string[] PhoneEventTokensClose = new[] { "close", "hang", "off" };
+        private static readonly string[] SorbetVarTokens = new[]
+        {
+            "heat", "heater", "temp", "blower", "fan", "defrost", "defog", "window", "ice", "scrape", "snow"
+        };
 
         private readonly Settings _settings;
         private VehicleSync _vehicleSync;
         private readonly List<DoorEntry> _doors = new List<DoorEntry>();
         private readonly Dictionary<uint, DoorEntry> _doorLookup = new Dictionary<uint, DoorEntry>();
         private readonly List<DoorEventData> _doorEventQueue = new List<DoorEventData>(16);
+        private readonly List<ScrapeStateData> _scrapeStateQueue = new List<ScrapeStateData>(16);
+        private readonly HashSet<uint> _loggedSorbetEntries = new HashSet<uint>();
         private int _lastSceneIndex = int.MinValue;
         private string _lastSceneName = string.Empty;
         private float _nextRotationSampleTime;
@@ -48,11 +66,18 @@ namespace MyWinterCarMpMod.Sync
         private float _nextEventLogTime;
         private float _nextHingeSendLogTime;
         private float _nextHingeApplyLogTime;
+        private float _nextScrapeLogTime;
+        private float _nextDashboardSampleTime;
+        private float _nextDashboardSummaryTime;
+        private float _lastDashboardSendTime;
+        private float _nextDashboardApplyLogTime;
         private bool _dumpedDoors;
         private readonly HashSet<uint> _missingDoorIds = new HashSet<uint>();
         private bool _pendingRescan;
         private float _nextRescanTime;
         private string _rescanReason = string.Empty;
+        private bool _sorbetBindingsReady;
+        private readonly List<SorbetControlBinding> _sorbetControls = new List<SorbetControlBinding>(8);
 
         public DoorSync(Settings settings)
         {
@@ -130,7 +155,7 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
-                if (entry.AllowVehiclePlayMaker)
+                if (entry.AllowVehiclePlayMaker && !IsSorbetDoor(entry.DebugPath, entry.Transform))
                 {
                     continue;
                 }
@@ -204,7 +229,7 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
-                if (entry.AllowVehiclePlayMaker)
+                if (entry.AllowVehiclePlayMaker && !IsSorbetDoor(entry.DebugPath, entry.Transform))
                 {
                     continue;
                 }
@@ -225,6 +250,18 @@ namespace MyWinterCarMpMod.Sync
                 }
 
                 float angle = NormalizeAngle(entry.Hinge.angle);
+                if (Mathf.Abs(angle) <= VehicleHingeDeadzone)
+                {
+                    angle = 0f;
+                }
+                if (entry.VehicleBody != null)
+                {
+                    float speed = entry.VehicleBody.velocity.magnitude;
+                    if (speed > 0.5f && Mathf.Abs(angle) < 8f)
+                    {
+                        angle = 0f;
+                    }
+                }
                 if (Mathf.Abs(Mathf.DeltaAngle(entry.LastSentHingeAngle, angle)) < angleThreshold)
                 {
                     continue;
@@ -271,6 +308,268 @@ namespace MyWinterCarMpMod.Sync
             return buffer.Count;
         }
 
+        public int CollectScrapeStates(List<ScrapeStateData> buffer)
+        {
+            buffer.Clear();
+            if (!Enabled || _scrapeStateQueue.Count == 0)
+            {
+                return 0;
+            }
+
+            for (int i = 0; i < _scrapeStateQueue.Count; i++)
+            {
+                buffer.Add(_scrapeStateQueue[i]);
+            }
+            _scrapeStateQueue.Clear();
+            return buffer.Count;
+        }
+
+        public int CollectScrapeSnapshot(List<ScrapeStateData> buffer)
+        {
+            buffer.Clear();
+            if (!Enabled || _doors.Count == 0)
+            {
+                return 0;
+            }
+
+            for (int i = 0; i < _doors.Count; i++)
+            {
+                DoorEntry entry = _doors[i];
+                if (entry == null || !IsScrapeEntry(entry))
+                {
+                    continue;
+                }
+
+                EnsureScrapeState(entry);
+                if (!entry.HasScrapeState || entry.ScrapeLayer == null || entry.ScrapeX == null ||
+                    entry.ScrapeXold == null || entry.ScrapeDistance == null)
+                {
+                    continue;
+                }
+
+                buffer.Add(new ScrapeStateData
+                {
+                    DoorId = entry.Id,
+                    Layer = entry.ScrapeLayer.Value,
+                    X = entry.ScrapeX.Value,
+                    Xold = entry.ScrapeXold.Value,
+                    Distance = entry.ScrapeDistance.Value
+                });
+            }
+
+            return buffer.Count;
+        }
+
+        public bool TryBuildSorbetDashboardState(long unixTimeMs, uint vehicleId, bool allowSend, out SorbetDashboardStateData state)
+        {
+            state = new SorbetDashboardStateData();
+            if (!Enabled || !allowSend || vehicleId == 0)
+            {
+                return false;
+            }
+
+            EnsureSorbetControlBindings();
+            if (_sorbetControls.Count == 0)
+            {
+                return false;
+            }
+
+            float now = Time.realtimeSinceStartup;
+            if (now < _nextDashboardSampleTime)
+            {
+                return false;
+            }
+            _nextDashboardSampleTime = now + 0.1f;
+
+            bool changed = false;
+            byte mask = 0;
+
+            ControlValueKind heaterTempKind;
+            float heaterTempValue;
+            UpdateSorbetControl(_sorbetControls, SorbetControl.HeaterTemp, now, out heaterTempKind, out heaterTempValue, ref changed, ref mask);
+
+            ControlValueKind heaterBlowerKind;
+            float heaterBlowerValue;
+            UpdateSorbetControl(_sorbetControls, SorbetControl.HeaterBlower, now, out heaterBlowerKind, out heaterBlowerValue, ref changed, ref mask);
+
+            ControlValueKind heaterDirectionKind;
+            float heaterDirectionValue;
+            UpdateSorbetControl(_sorbetControls, SorbetControl.HeaterDirection, now, out heaterDirectionKind, out heaterDirectionValue, ref changed, ref mask);
+
+            ControlValueKind windowHeaterKind;
+            float windowHeaterValue;
+            UpdateSorbetControl(_sorbetControls, SorbetControl.WindowHeater, now, out windowHeaterKind, out windowHeaterValue, ref changed, ref mask);
+
+            ControlValueKind lightModesKind;
+            float lightModesValue;
+            UpdateSorbetControl(_sorbetControls, SorbetControl.LightModes, now, out lightModesKind, out lightModesValue, ref changed, ref mask);
+
+            ControlValueKind hazardKind;
+            float hazardValue;
+            UpdateSorbetControl(_sorbetControls, SorbetControl.Hazard, now, out hazardKind, out hazardValue, ref changed, ref mask);
+
+            if (mask == 0)
+            {
+                return false;
+            }
+
+            if (!changed && now - _lastDashboardSendTime < 1.5f)
+            {
+                return false;
+            }
+
+            _lastDashboardSendTime = now;
+            state = new SorbetDashboardStateData
+            {
+                UnixTimeMs = unixTimeMs,
+                VehicleId = vehicleId,
+                Mask = mask,
+                HeaterTempKind = (byte)heaterTempKind,
+                HeaterTempValue = heaterTempValue,
+                HeaterBlowerKind = (byte)heaterBlowerKind,
+                HeaterBlowerValue = heaterBlowerValue,
+                HeaterDirectionKind = (byte)heaterDirectionKind,
+                HeaterDirectionValue = heaterDirectionValue,
+                WindowHeaterKind = (byte)windowHeaterKind,
+                WindowHeaterValue = windowHeaterValue,
+                LightModesKind = (byte)lightModesKind,
+                LightModesValue = lightModesValue,
+                HazardKind = (byte)hazardKind,
+                HazardValue = hazardValue
+            };
+
+            if (_settings != null && _settings.VerboseLogging.Value && now >= _nextDashboardSummaryTime)
+            {
+                DebugLog.Verbose("DoorSync: sorbet dashboard summary temp=" + heaterTempValue.ToString("F2") +
+                    " blower=" + heaterBlowerValue.ToString("F2") +
+                    " dir=" + heaterDirectionValue.ToString("F2") +
+                    " win=" + windowHeaterValue.ToString("F2") +
+                    " lights=" + lightModesValue.ToString("F2") +
+                    " hazard=" + hazardValue.ToString("F2"));
+                _nextDashboardSummaryTime = now + 1.5f;
+            }
+
+            return true;
+        }
+
+        public void ApplyRemoteScrapeState(ScrapeStateData state)
+        {
+            if (!Enabled)
+            {
+                return;
+            }
+
+            DoorEntry entry;
+            if (!_doorLookup.TryGetValue(state.DoorId, out entry))
+            {
+                RegisterMissingDoorId(state.DoorId, "missing scrape door id");
+                return;
+            }
+
+            if (state.Sequence != 0 && !IsNewerSequence(state.Sequence, entry.LastRemoteScrapeSequence))
+            {
+                return;
+            }
+
+            if (entry.Fsm == null || entry.Fsm.Fsm == null)
+            {
+                RequestRescan("missing scrape fsm for door id " + state.DoorId);
+                return;
+            }
+
+            EnsureScrapeState(entry);
+            if (!entry.HasScrapeState)
+            {
+                return;
+            }
+
+            entry.LastRemoteScrapeSequence = state.Sequence;
+            float now = Time.realtimeSinceStartup;
+            entry.ScrapeSuppressUntilTime = now + 0.5f;
+
+            if (entry.ScrapeLayer != null)
+            {
+                entry.ScrapeLayer.Value = state.Layer;
+            }
+            if (entry.ScrapeX != null)
+            {
+                entry.ScrapeX.Value = state.X;
+            }
+            if (entry.ScrapeXold != null)
+            {
+                entry.ScrapeXold.Value = state.Xold;
+            }
+            if (entry.ScrapeDistance != null)
+            {
+                entry.ScrapeDistance.Value = state.Distance;
+            }
+
+            entry.LastScrapeLayer = state.Layer;
+            entry.LastScrapeX = state.X;
+            entry.LastScrapeXold = state.Xold;
+            entry.LastScrapeDistance = state.Distance;
+
+            bool sentAction = false;
+            if (entry.Fsm.Fsm.HasEvent("DOWN"))
+            {
+                entry.Fsm.SendEvent("DOWN");
+                sentAction = true;
+            }
+            if (entry.Fsm.Fsm.HasEvent("SCRAPE"))
+            {
+                entry.Fsm.SendEvent("SCRAPE");
+                sentAction = true;
+            }
+            if (sentAction && entry.Fsm.Fsm.HasEvent("OFF"))
+            {
+                entry.Fsm.SendEvent("OFF");
+            }
+
+            if (_settings != null && _settings.VerboseLogging.Value && now >= _nextScrapeLogTime)
+            {
+                DebugLog.Verbose("DoorSync: apply remote scrape id=" + entry.Id +
+                    " layer=" + state.Layer +
+                    " x=" + state.X.ToString("F2") +
+                    " dist=" + state.Distance.ToString("F2") +
+                    " path=" + entry.DebugPath);
+                _nextScrapeLogTime = now + 1f;
+            }
+        }
+
+        public void ApplySorbetDashboardState(SorbetDashboardStateData state)
+        {
+            if (!Enabled)
+            {
+                return;
+            }
+
+            EnsureSorbetControlBindings();
+            if (_sorbetControls.Count == 0)
+            {
+                return;
+            }
+
+            float now = Time.realtimeSinceStartup;
+            ApplySorbetControl(_sorbetControls, SorbetControl.HeaterTemp, now, state.Mask, (ControlValueKind)state.HeaterTempKind, state.HeaterTempValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.HeaterBlower, now, state.Mask, (ControlValueKind)state.HeaterBlowerKind, state.HeaterBlowerValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.HeaterDirection, now, state.Mask, (ControlValueKind)state.HeaterDirectionKind, state.HeaterDirectionValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.WindowHeater, now, state.Mask, (ControlValueKind)state.WindowHeaterKind, state.WindowHeaterValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.LightModes, now, state.Mask, (ControlValueKind)state.LightModesKind, state.LightModesValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.Hazard, now, state.Mask, (ControlValueKind)state.HazardKind, state.HazardValue);
+
+            if (_settings != null && _settings.VerboseLogging.Value && now >= _nextDashboardApplyLogTime)
+            {
+                DebugLog.Verbose("DoorSync: applied sorbet dashboard state mask=" + state.Mask +
+                    " temp=" + state.HeaterTempValue.ToString("F2") +
+                    " blower=" + state.HeaterBlowerValue.ToString("F2") +
+                    " dir=" + state.HeaterDirectionValue.ToString("F2") +
+                    " win=" + state.WindowHeaterValue.ToString("F2") +
+                    " lights=" + state.LightModesValue.ToString("F2") +
+                    " hazard=" + state.HazardValue.ToString("F2"));
+                _nextDashboardApplyLogTime = now + 1.5f;
+            }
+        }
+
         public void Update(float now)
         {
             if (!Enabled || _doors.Count == 0)
@@ -286,6 +585,32 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
+                if (entry.IsVehicleDoor && _vehicleSync != null && _settings != null)
+                {
+                    OwnerKind localOwner = OwnerKind.None;
+                    if (_settings.Mode.Value == Mode.Host)
+                    {
+                        localOwner = OwnerKind.Host;
+                    }
+                    else if (_settings.Mode.Value == Mode.Client)
+                    {
+                        localOwner = OwnerKind.Client;
+                    }
+
+                    bool includeUnowned = localOwner == OwnerKind.Host;
+                    if (!entry.AllowVehiclePlayMaker)
+                    {
+                        if (IsLocalVehicleAuthority(entry, localOwner, includeUnowned))
+                        {
+                            EnsureRemoteDoorDynamic(entry);
+                        }
+                        else
+                        {
+                            EnsureRemoteDoorKinematic(entry);
+                        }
+                    }
+                }
+
                 if (!entry.SkipRotationSync && now < entry.RemoteApplyUntilTime && now - entry.LastLocalChangeTime > LocalHoldSeconds)
                 {
                     ApplyRotation(entry, entry.LastAppliedRotation);
@@ -293,7 +618,7 @@ namespace MyWinterCarMpMod.Sync
 
                 if (entry.DoorOpenBool != null && now >= entry.SuppressPlayMakerUntilTime)
                 {
-                    if (entry.IsVehicleDoor && entry.AllowVehiclePlayMaker)
+                    if (entry.IsVehicleDoor && entry.AllowVehiclePlayMaker && !IsSorbetDoor(entry.DebugPath, entry.Transform))
                     {
                         continue;
                     }
@@ -302,8 +627,13 @@ namespace MyWinterCarMpMod.Sync
                     if (open != entry.LastDoorOpen)
                     {
                         entry.LastDoorOpen = open;
-                        EnqueueDoorEvent(entry, open);
+                        EnqueueDoorEvent(entry, open, null);
                     }
+                }
+
+                if (entry.HasScrapeState)
+                {
+                    UpdateScrapeState(entry, now);
                 }
             }
         }
@@ -363,7 +693,10 @@ namespace MyWinterCarMpMod.Sync
             entry.RemoteApplyUntilTime = now + RemoteApplySeconds;
             if (entry.IsVehicleDoor && entry.SkipHingeSync)
             {
-                EnsureRemoteDoorKinematic(entry);
+                if (entry.SkipHingeSync)
+                {
+                    EnsureRemoteDoorKinematic(entry);
+                }
             }
             ApplyRotation(entry, target);
 
@@ -401,6 +734,23 @@ namespace MyWinterCarMpMod.Sync
             }
 
             float now = Time.realtimeSinceStartup;
+            OwnerKind localOwner = OwnerKind.None;
+            if (_settings != null)
+            {
+                if (_settings.Mode.Value == Mode.Host)
+                {
+                    localOwner = OwnerKind.Host;
+                }
+                else if (_settings.Mode.Value == Mode.Client)
+                {
+                    localOwner = OwnerKind.Client;
+                }
+            }
+            bool includeUnowned = localOwner == OwnerKind.Host;
+            if (entry.IsVehicleDoor && IsLocalVehicleAuthority(entry, localOwner, includeUnowned))
+            {
+                return;
+            }
             if (now - entry.LastLocalHingeTime < LocalHoldSeconds)
             {
                 return;
@@ -412,10 +762,6 @@ namespace MyWinterCarMpMod.Sync
             }
 
             float targetAngle = NormalizeAngle(state.Angle);
-            if (entry.IsVehicleDoor)
-            {
-                EnsureRemoteDoorDynamic(entry);
-            }
             bool useLimits = entry.HingeUseLimits;
             if (entry.IsVehicleDoor && useLimits && Mathf.Abs(entry.HingeMax - entry.HingeMin) < 0.05f)
             {
@@ -428,6 +774,18 @@ namespace MyWinterCarMpMod.Sync
             if (useLimits)
             {
                 targetAngle = Mathf.Clamp(targetAngle, entry.HingeMin, entry.HingeMax);
+            }
+            if (Mathf.Abs(targetAngle) <= VehicleHingeDeadzone)
+            {
+                targetAngle = 0f;
+            }
+            if (entry.VehicleBody != null)
+            {
+                float speed = entry.VehicleBody.velocity.magnitude;
+                if (speed > 0.5f && Mathf.Abs(targetAngle) < 8f)
+                {
+                    targetAngle = 0f;
+                }
             }
 
             float angleThreshold = _settings.GetDoorAngleThreshold();
@@ -443,6 +801,7 @@ namespace MyWinterCarMpMod.Sync
             entry.LastAppliedHingeAngle = targetAngle;
             entry.LastSentHingeAngle = targetAngle;
             entry.SuppressHingeUntilTime = now + RemoteSuppressSeconds;
+            EnsureRemoteDoorKinematic(entry);
             ApplyHinge(entry, targetAngle);
 
             if (now >= _nextHingeApplyLogTime)
@@ -493,21 +852,84 @@ namespace MyWinterCarMpMod.Sync
             }
 
             float now = Time.realtimeSinceStartup;
-            entry.SuppressPlayMakerUntilTime = now + RemoteSuppressSeconds;
-            entry.LastDoorOpen = state.Open != 0;
-
-            string eventName = state.Open != 0 ? entry.MpOpenEventName : entry.MpCloseEventName;
-            if (entry.AllowVehiclePlayMaker && !entry.IsVehicleDoor)
+            float suppressSeconds = RemoteSuppressSeconds;
+            if (IsScrapeEntry(entry) || IsSorbetHeaterButton(entry))
             {
-                string nativeEvent = state.Open != 0 ? entry.OpenEventName : entry.CloseEventName;
-                if (!string.IsNullOrEmpty(nativeEvent) && entry.Fsm.Fsm != null && entry.Fsm.Fsm.HasEvent(nativeEvent))
+                suppressSeconds = 0.8f;
+            }
+            entry.SuppressPlayMakerUntilTime = now + suppressSeconds;
+            bool isOpen = state.Open != 0;
+            entry.LastDoorOpen = isOpen;
+            if (entry.DoorOpenBool != null)
+            {
+                entry.DoorOpenBool.Value = isOpen;
+            }
+
+            string eventName = null;
+            if (!string.IsNullOrEmpty(state.EventName) && entry.Fsm.Fsm != null && entry.Fsm.Fsm.HasEvent(state.EventName))
+            {
+                eventName = state.EventName;
+                if (entry.EventOnly || IsSorbetDoor(entry.DebugPath, entry.Transform))
                 {
-                    eventName = nativeEvent;
+                    EnsureGlobalTransitionForEvent(entry.Fsm, eventName);
+                }
+            }
+            else if (!string.IsNullOrEmpty(state.EventName) && _settings != null && _settings.VerboseLogging.Value && now >= _nextEventLogTime)
+            {
+                DebugLog.Verbose("DoorSync: remote event missing fsm event id=" + entry.Id +
+                    " name=" + state.EventName +
+                    " fsm=" + (entry.Fsm != null ? entry.Fsm.FsmName : "<null>") +
+                    " path=" + entry.DebugPath);
+                _nextEventLogTime = now + 1f;
+            }
+            if (string.IsNullOrEmpty(eventName))
+            {
+                eventName = state.Open != 0 ? entry.MpOpenEventName : entry.MpCloseEventName;
+                bool useNativeEvent = entry.EventOnly || (entry.InteractionKind != InteractionKind.Door && entry.InteractionKind != InteractionKind.Tap);
+                if (useNativeEvent)
+                {
+                    string nativeEvent = state.Open != 0 ? entry.OpenEventName : entry.CloseEventName;
+                    if (!string.IsNullOrEmpty(nativeEvent) && entry.Fsm.Fsm != null && entry.Fsm.Fsm.HasEvent(nativeEvent))
+                    {
+                        eventName = nativeEvent;
+                    }
                 }
             }
 
             if (!string.IsNullOrEmpty(eventName))
             {
+                bool isScrape = IsScrapeEntry(entry);
+                bool isHeater = IsSorbetHeaterButton(entry);
+                bool isWindowHeater = isHeater && IsSorbetWindowHeater(entry);
+                if (isScrape)
+                {
+                    if (!IsScrapeEvent(eventName))
+                    {
+                        if (_settings != null && _settings.VerboseLogging.Value && now >= _nextEventLogTime)
+                        {
+                            DebugLog.Verbose("DoorSync: skip remote scrape event id=" + entry.Id +
+                                " event=" + eventName +
+                                " path=" + entry.DebugPath);
+                            _nextEventLogTime = now + 1f;
+                        }
+                        return;
+                    }
+                }
+                if (isHeater && !isWindowHeater)
+                {
+                    if (!IsHeaterStepEvent(eventName))
+                    {
+                        if (_settings != null && _settings.VerboseLogging.Value && now >= _nextEventLogTime)
+                        {
+                            DebugLog.Verbose("DoorSync: skip remote heater event id=" + entry.Id +
+                                " event=" + eventName +
+                                " path=" + entry.DebugPath);
+                            _nextEventLogTime = now + 1f;
+                        }
+                        return;
+                    }
+                }
+
                 entry.Fsm.SendEvent(eventName);
                 if (_settings != null && _settings.VerboseLogging.Value && now >= _nextEventLogTime)
                 {
@@ -518,6 +940,7 @@ namespace MyWinterCarMpMod.Sync
                         " path=" + entry.DebugPath);
                     _nextEventLogTime = now + 1f;
                 }
+                LogSorbetDetails(entry, "remote", eventName);
             }
         }
 
@@ -594,6 +1017,7 @@ namespace MyWinterCarMpMod.Sync
             _doors.Clear();
             _doorLookup.Clear();
             _doorEventQueue.Clear();
+            _scrapeStateQueue.Clear();
             _missingDoorIds.Clear();
             _dumpedDoors = false;
             _nextRotationSampleTime = 0f;
@@ -603,9 +1027,16 @@ namespace MyWinterCarMpMod.Sync
             _nextEventLogTime = 0f;
             _nextHingeSendLogTime = 0f;
             _nextHingeApplyLogTime = 0f;
+            _nextScrapeLogTime = 0f;
+            _nextDashboardSampleTime = 0f;
+            _nextDashboardSummaryTime = 0f;
+            _lastDashboardSendTime = 0f;
+            _nextDashboardApplyLogTime = 0f;
             _pendingRescan = false;
             _nextRescanTime = 0f;
             _rescanReason = string.Empty;
+            _sorbetBindingsReady = false;
+            _sorbetControls.Clear();
         }
 
         private void ScanDoors()
@@ -745,6 +1176,7 @@ namespace MyWinterCarMpMod.Sync
             };
 
             entry.IsVehicleDoor = IsVehicleDoor(doorTransform, hinge);
+            entry.VehicleBody = entry.IsVehicleDoor ? FindVehicleBody(doorTransform) : null;
             if (entry.IsVehicleDoor && hinge != null)
             {
                 ConfigureVehicleHinge(entry);
@@ -831,6 +1263,36 @@ namespace MyWinterCarMpMod.Sync
             return false;
         }
 
+        private static bool IsSorbetTransform(Transform transform)
+        {
+            if (transform == null)
+            {
+                return false;
+            }
+
+            Transform root = transform.root;
+            if (root != null && !string.IsNullOrEmpty(root.name) &&
+                root.name.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            Transform current = transform;
+            int depth = 0;
+            while (current != null && depth < 4)
+            {
+                if (!string.IsNullOrEmpty(current.name) &&
+                    current.name.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+                current = current.parent;
+                depth++;
+            }
+
+            return false;
+        }
+
         private static PlayMakerFSM FindVehicleDoorFsm(Transform doorTransform)
         {
             if (doorTransform == null)
@@ -861,7 +1323,11 @@ namespace MyWinterCarMpMod.Sync
 
                 string path = BuildDebugPath(fsm.transform);
                 if (path.IndexOf("handle", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    path.IndexOf("hatch", StringComparison.OrdinalIgnoreCase) >= 0)
+                    path.IndexOf("hatch", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    path.IndexOf("boot", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    path.IndexOf("trunk", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    path.IndexOf("lid", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    path.IndexOf("gate", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     return fsm;
                 }
@@ -928,6 +1394,12 @@ namespace MyWinterCarMpMod.Sync
                 return false;
             }
 
+            string nameHint = BuildFsmNameHint(fsm);
+            if (string.IsNullOrEmpty(nameHint) && doorTransform != null)
+            {
+                nameHint = doorTransform.name;
+            }
+
             DoorEntry existing = FindDoorByPath(debugPath);
             if (existing != null)
             {
@@ -937,13 +1409,15 @@ namespace MyWinterCarMpMod.Sync
                 }
 
                 bool attached = fsm != null
-                    ? AttachPlayMaker(fsm, existing, doorTransform.name)
+                    ? AttachPlayMaker(fsm, existing, nameHint)
                     : AttachPlayMaker(doorTransform, existing);
 
                 if (attached)
                 {
                     existing.HasPlayMaker = true;
                     UpdateRotationSyncPolicy(existing);
+                    EnsureScrapeState(existing);
+                    _sorbetBindingsReady = false;
                     playMakerAttached++;
                     DebugLog.Verbose("DoorSync: playmaker attached to existing door id=" + existing.Id + " door=" + doorTransform.name + " path=" + debugPath);
                     return true;
@@ -981,11 +1455,12 @@ namespace MyWinterCarMpMod.Sync
                 BaseLocalRotation = doorTransform.localRotation,
                 LastSentRotation = doorTransform.localRotation,
                 LastAppliedRotation = doorTransform.localRotation,
-                InteractionKind = DetectInteractionKind(doorTransform.name, debugPath)
+                InteractionKind = DetectInteractionKind(nameHint, debugPath)
             };
 
             entry.IsVehicleDoor = IsVehicleDoor(doorTransform, null);
-            if (entry.IsVehicleDoor)
+            entry.VehicleBody = entry.IsVehicleDoor ? FindVehicleBody(doorTransform) : null;
+            if (entry.IsVehicleDoor && !IsSorbetDoor(debugPath, doorTransform) && entry.InteractionKind == InteractionKind.Door)
             {
                 if (_settings != null && _settings.VerboseLogging.Value)
                 {
@@ -994,7 +1469,13 @@ namespace MyWinterCarMpMod.Sync
                 return false;
             }
 
-            bool playMaker = AttachPlayMaker(fsm, entry, doorTransform.name);
+            if (entry.IsVehicleDoor)
+            {
+                entry.AllowVehiclePlayMaker = true;
+                entry.SkipHingeSync = true;
+            }
+
+            bool playMaker = AttachPlayMaker(fsm, entry, nameHint);
             if (!playMaker)
             {
                 DebugLog.Verbose("DoorSync: playmaker door skipped (no FSM) " + doorTransform.name);
@@ -1006,6 +1487,7 @@ namespace MyWinterCarMpMod.Sync
             _doors.Add(entry);
             _doorLookup.Add(id, entry);
             playMakerAttached++;
+            _sorbetBindingsReady = false;
             DebugLog.Verbose("DoorSync: add playmaker door id=" + id + " door=" + doorTransform.name + " key=" + key + " path=" + debugPath);
             return true;
         }
@@ -1035,6 +1517,13 @@ namespace MyWinterCarMpMod.Sync
         {
             if (entry == null || entry.Hinge == null)
             {
+                return;
+            }
+
+            if (entry.Rigidbody != null && entry.Rigidbody.isKinematic && entry.Transform != null)
+            {
+                entry.Transform.localRotation = entry.BaseLocalRotation *
+                    Quaternion.AngleAxis(targetAngle, entry.HingeAxis);
                 return;
             }
 
@@ -1074,6 +1563,10 @@ namespace MyWinterCarMpMod.Sync
                 entry.Rigidbody.velocity = Vector3.zero;
                 entry.Rigidbody.angularVelocity = Vector3.zero;
             }
+            if (entry.Rigidbody.interpolation != RigidbodyInterpolation.Interpolate)
+            {
+                entry.Rigidbody.interpolation = RigidbodyInterpolation.Interpolate;
+            }
         }
 
         private static void EnsureRemoteDoorDynamic(DoorEntry entry)
@@ -1088,6 +1581,10 @@ namespace MyWinterCarMpMod.Sync
                 entry.Rigidbody.isKinematic = false;
                 entry.Rigidbody.velocity = Vector3.zero;
                 entry.Rigidbody.angularVelocity = Vector3.zero;
+            }
+            if (entry.Rigidbody.interpolation != RigidbodyInterpolation.None)
+            {
+                entry.Rigidbody.interpolation = RigidbodyInterpolation.None;
             }
         }
 
@@ -1208,7 +1705,8 @@ namespace MyWinterCarMpMod.Sync
             }
 
             int before = candidates.Count;
-            HashSet<Transform> seen = new HashSet<Transform>();
+            HashSet<Transform> seenDoors = new HashSet<Transform>();
+            HashSet<PlayMakerFSM> seenFsms = new HashSet<PlayMakerFSM>();
             for (int i = 0; i < fsms.Length; i++)
             {
                 PlayMakerFSM fsm = fsms[i];
@@ -1222,28 +1720,86 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
-                Transform doorTransform = ResolveDoorTransform(fsm.gameObject.transform);
-                if (doorTransform == null || seen.Contains(doorTransform))
+                string fsmPath = BuildDebugPath(fsm.transform);
+                string nameHint = BuildFsmNameHint(fsm);
+                InteractionKind kind = DetectInteractionKind(nameHint, fsmPath);
+                Transform doorTransform = kind == InteractionKind.Door
+                    ? ResolveDoorTransform(fsm.gameObject.transform)
+                    : fsm.transform;
+                if (doorTransform == null)
                 {
                     continue;
                 }
 
-                string debugPath = BuildDebugPath(doorTransform);
-                if (useFilter && !NameMatches(doorTransform, filter))
+                if (kind == InteractionKind.Door)
                 {
-                    InteractionKind kind = DetectInteractionKind(doorTransform.name, debugPath);
+                    if (seenDoors.Contains(doorTransform))
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    if (seenFsms.Contains(fsm))
+                    {
+                        continue;
+                    }
+                }
+
+                string debugPath = BuildDebugPath(doorTransform);
+                bool isSorbetHatch = debugPath.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    debugPath.IndexOf("hatch", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (useFilter && !NameMatches(doorTransform, filter) && !isSorbetHatch)
+                {
                     if (kind == InteractionKind.Door)
                     {
                         continue;
                     }
                 }
 
-                seen.Add(doorTransform);
+                if (kind == InteractionKind.Door)
+                {
+                    seenDoors.Add(doorTransform);
+                }
+                else
+                {
+                    seenFsms.Add(fsm);
+                }
+
                 string key = debugPath + "|pm";
                 candidates.Add(new DoorCandidate { Hinge = null, DoorTransform = doorTransform, Fsm = fsm, Key = key, DebugPath = debugPath });
             }
 
             return candidates.Count - before;
+        }
+
+        private static bool HasAnyEventContainingTokens(PlayMakerFSM fsm, string[] tokens)
+        {
+            if (fsm == null || fsm.Fsm == null || tokens == null || tokens.Length == 0)
+            {
+                return false;
+            }
+
+            FsmEvent[] events = fsm.Fsm.Events;
+            if (events == null || events.Length == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < events.Length; i++)
+            {
+                FsmEvent ev = events[i];
+                if (ev == null || string.IsNullOrEmpty(ev.Name))
+                {
+                    continue;
+                }
+                if (ContainsAnyToken(ev.Name, tokens))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool IsDoorPlayMakerFsm(PlayMakerFSM fsm)
@@ -1261,12 +1817,15 @@ namespace MyWinterCarMpMod.Sync
 
             bool hasDoorSignals = PlayMakerBridge.HasAnyEvent(fsm, new[] { "OPEN", "CLOSE", "OPENDOOR", "CLOSEDOOR" }) ||
                 PlayMakerBridge.FindStateByNameContains(fsm, DoorStateTokens) != null;
-            bool hasTapSignals = PlayMakerBridge.HasAnyEvent(fsm, new[] { "ON", "OFF" }) ||
+            bool hasTapSignals = PlayMakerBridge.HasAnyEvent(fsm, TapEventExactTokens) ||
+                HasAnyEventContainingTokens(fsm, TapEventTokensOn) ||
+                HasAnyEventContainingTokens(fsm, TapEventTokensOff) ||
                 (PlayMakerBridge.FindStateByNameContains(fsm, TapOpenTokens) != null &&
                  PlayMakerBridge.FindStateByNameContains(fsm, TapCloseTokens) != null);
             bool hasPhoneSignals = PlayMakerBridge.FindStateByNameContains(fsm, PhoneOpenTokens) != null &&
                 PlayMakerBridge.FindStateByNameContains(fsm, PhoneCloseTokens) != null;
 
+            bool isSorbet = IsSorbetTransform(fsm.transform);
             bool isDoorName = string.Equals(fsmName, "Use", StringComparison.OrdinalIgnoreCase) ||
                 ContainsAnyToken(fsmName, DoorTokens) ||
                 ContainsAnyToken(fsm.gameObject.name, DoorTokens) ||
@@ -1285,7 +1844,7 @@ namespace MyWinterCarMpMod.Sync
                 return true;
             }
 
-            if (hasTapSignals && isTapName)
+            if (hasTapSignals && (isTapName || isSorbet))
             {
                 return true;
             }
@@ -1422,8 +1981,16 @@ namespace MyWinterCarMpMod.Sync
             }
             else if (entry.IsVehicleDoor)
             {
-                // Vehicle doors often transition via non-OPEN events; allow any trigger and filter later.
-                allowAnyEvent = true;
+                // Vehicle doors can use non-OPEN events; keep Sorbet strict to avoid ghost opens.
+                allowAnyEvent = !IsSorbetDoor(entry.DebugPath, entry.Transform);
+            }
+
+            if (kind == InteractionKind.Tap && IsSorbetDoor(entry.DebugPath, entry.Transform))
+            {
+                if (AttachPlayMakerEventOnly(fsm, entry, doorName, openEventTokens, closeEventTokens))
+                {
+                    return true;
+                }
             }
 
             FsmState openState = null;
@@ -1445,6 +2012,14 @@ namespace MyWinterCarMpMod.Sync
             }
             if (openState == null || closeState == null)
             {
+                if (kind == InteractionKind.Tap)
+                {
+                    if (AttachPlayMakerEventOnly(fsm, entry, doorName, openEventTokens, closeEventTokens))
+                    {
+                        return true;
+                    }
+                }
+
                 DebugLog.Verbose("DoorSync: PlayMaker states missing for " + kind + " " + (doorName ?? "<null>"));
                 return false;
             }
@@ -1475,6 +2050,7 @@ namespace MyWinterCarMpMod.Sync
             entry.CloseEventName = FindEventName(fsm, PlayMakerBridge.GetDefaultDoorCloseEventName(), closeEventTokens);
             entry.DoorOpenBool = PlayMakerBridge.FindBool(fsm, "DoorOpen") ??
                 PlayMakerBridge.FindBoolByTokens(fsm, new[] { "dooropen", "isopen", "open", "on" });
+            EnsureScrapeState(entry);
             if (entry.DoorOpenBool != null)
             {
                 entry.LastDoorOpen = entry.DoorOpenBool.Value;
@@ -1490,6 +2066,229 @@ namespace MyWinterCarMpMod.Sync
             return true;
         }
 
+        private bool AttachPlayMakerEventOnly(PlayMakerFSM fsm, DoorEntry entry, string doorName, string[] openEventTokens, string[] closeEventTokens)
+        {
+            if (entry == null || fsm == null || fsm.Fsm == null)
+            {
+                return false;
+            }
+
+            if (entry.Fsm == fsm && entry.HasPlayMaker)
+            {
+                return true;
+            }
+
+            string openEventName = FindEventName(fsm, null, openEventTokens);
+            string closeEventName = FindEventName(fsm, null, closeEventTokens);
+            if (string.IsNullOrEmpty(openEventName) && string.IsNullOrEmpty(closeEventName) && fsm.Fsm.HasEvent("USE"))
+            {
+                openEventName = "USE";
+            }
+
+            if (string.IsNullOrEmpty(openEventName) && string.IsNullOrEmpty(closeEventName))
+            {
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(openEventName))
+            {
+                openEventName = closeEventName;
+            }
+
+            if (string.IsNullOrEmpty(closeEventName))
+            {
+                closeEventName = openEventName;
+            }
+
+            bool allowAnyEvent = entry.InteractionKind == InteractionKind.Tap && IsSorbetDoor(entry.DebugPath, entry.Transform);
+
+            string mpOpenEventName = "MWC_MP_OPEN";
+            string mpCloseEventName = "MWC_MP_CLOSE";
+
+            EnsureEventOnlyGlobalTransitions(fsm, openEventTokens, closeEventTokens, mpOpenEventName, mpCloseEventName);
+
+            FsmState[] states = fsm.Fsm.States;
+            if (states != null)
+            {
+                for (int i = 0; i < states.Length; i++)
+                {
+                    FsmState state = states[i];
+                    if (state == null)
+                    {
+                        continue;
+                    }
+                    PlayMakerBridge.PrependAction(state, new DoorPlayMakerEventAction(this, entry.Id, openEventTokens, closeEventTokens, allowAnyEvent));
+                }
+            }
+
+            entry.Fsm = fsm;
+            entry.HasPlayMaker = true;
+            entry.EventOnly = true;
+            entry.MpOpenEventName = mpOpenEventName;
+            entry.MpCloseEventName = mpCloseEventName;
+            entry.OpenEventName = openEventName;
+            entry.CloseEventName = closeEventName;
+            entry.DoorOpenBool = PlayMakerBridge.FindBool(fsm, "DoorOpen") ??
+                PlayMakerBridge.FindBoolByTokens(fsm, new[] { "dooropen", "isopen", "open", "on" });
+            EnsureScrapeState(entry);
+            if (entry.DoorOpenBool != null)
+            {
+                entry.LastDoorOpen = entry.DoorOpenBool.Value;
+            }
+            if (entry.IsVehicleDoor && !entry.SkipHingeSync)
+            {
+                entry.SkipRotationSync = true;
+            }
+
+            DebugLog.Verbose("DoorSync: PlayMaker event hook attached to " + (doorName ?? "<null>") +
+                " kind=" + entry.InteractionKind +
+                " open=" + entry.OpenEventName +
+                " close=" + entry.CloseEventName);
+            return true;
+        }
+
+        private static void EnsureEventOnlyGlobalTransitions(PlayMakerFSM fsm, string[] openTokens, string[] closeTokens, string mpOpenEventName, string mpCloseEventName)
+        {
+            if (fsm == null || fsm.Fsm == null)
+            {
+                return;
+            }
+
+            FsmState openState = FindStateByNameExact(fsm, new[] { "ON" }) ?? PlayMakerBridge.FindStateByNameContains(fsm, openTokens);
+            FsmState closeState = FindStateByNameExact(fsm, new[] { "OFF" }) ?? PlayMakerBridge.FindStateByNameContains(fsm, closeTokens);
+
+            if (openState != null)
+            {
+                FsmEvent mpOpen = PlayMakerBridge.GetOrCreateEvent(fsm, mpOpenEventName);
+                if (!HasGlobalTransition(fsm, mpOpen))
+                {
+                    PlayMakerBridge.AddGlobalTransition(fsm, mpOpen, openState.Name);
+                }
+            }
+
+            if (closeState != null)
+            {
+                FsmEvent mpClose = PlayMakerBridge.GetOrCreateEvent(fsm, mpCloseEventName);
+                if (!HasGlobalTransition(fsm, mpClose))
+                {
+                    PlayMakerBridge.AddGlobalTransition(fsm, mpClose, closeState.Name);
+                }
+            }
+        }
+
+        private static bool HasGlobalTransition(PlayMakerFSM fsm, FsmEvent ev)
+        {
+            if (fsm == null || fsm.Fsm == null || ev == null)
+            {
+                return false;
+            }
+
+            FsmTransition[] transitions = fsm.FsmGlobalTransitions;
+            if (transitions == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < transitions.Length; i++)
+            {
+                FsmTransition transition = transitions[i];
+                if (transition != null && transition.FsmEvent == ev)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static void EnsureGlobalTransitionForEvent(PlayMakerFSM fsm, string eventName)
+        {
+            if (fsm == null || fsm.Fsm == null || string.IsNullOrEmpty(eventName))
+            {
+                return;
+            }
+
+            string trimmed = eventName.Trim();
+            if (string.IsNullOrEmpty(trimmed))
+            {
+                return;
+            }
+
+            FsmEvent ev = PlayMakerBridge.GetOrCreateEvent(fsm, trimmed);
+            if (HasGlobalTransition(fsm, ev))
+            {
+                return;
+            }
+
+            string[] tokens = BuildEventTokens(trimmed);
+            FsmState target = PlayMakerBridge.FindStateByNameContains(fsm, tokens);
+            if (target == null)
+            {
+                return;
+            }
+
+            PlayMakerBridge.AddGlobalTransition(fsm, ev, target.Name);
+        }
+
+        private static string[] BuildEventTokens(string eventName)
+        {
+            if (string.IsNullOrEmpty(eventName))
+            {
+                return new string[0];
+            }
+
+            string lower = eventName.ToLowerInvariant();
+            List<string> tokens = new List<string>();
+            tokens.Add(lower);
+
+            if (lower.Contains("inc") || lower.Contains("increase") || lower.Contains("plus"))
+            {
+                tokens.Add("inc");
+                tokens.Add("increase");
+                tokens.Add("plus");
+            }
+            if (lower.Contains("dec") || lower.Contains("decrease") || lower.Contains("minus"))
+            {
+                tokens.Add("dec");
+                tokens.Add("decrease");
+                tokens.Add("minus");
+            }
+            if (lower == "on" || lower.Contains("enable") || lower.Contains("start"))
+            {
+                tokens.Add("on");
+                tokens.Add("enable");
+                tokens.Add("start");
+            }
+            if (lower == "off" || lower.Contains("disable") || lower.Contains("stop"))
+            {
+                tokens.Add("off");
+                tokens.Add("disable");
+                tokens.Add("stop");
+            }
+            if (lower == "down" || lower.Contains("scrape"))
+            {
+                tokens.Add("down");
+                tokens.Add("scrape");
+            }
+            if (lower == "up")
+            {
+                tokens.Add("up");
+            }
+            if (lower == "next" || lower.Contains("cycle"))
+            {
+                tokens.Add("next");
+                tokens.Add("cycle");
+            }
+            if (lower == "prev" || lower == "previous" || lower.Contains("back"))
+            {
+                tokens.Add("prev");
+                tokens.Add("previous");
+                tokens.Add("back");
+            }
+
+            return tokens.ToArray();
+        }
+
         private static string FindEventName(PlayMakerFSM fsm, string fallback, string[] tokens)
         {
             if (fsm == null || fsm.Fsm == null || tokens == null || tokens.Length == 0)
@@ -1503,16 +2302,21 @@ namespace MyWinterCarMpMod.Sync
                 return fallback;
             }
 
-            for (int i = 0; i < events.Length; i++)
+            for (int t = 0; t < tokens.Length; t++)
             {
-                FsmEvent ev = events[i];
-                if (ev == null || string.IsNullOrEmpty(ev.Name))
+                string token = tokens[t];
+                if (string.IsNullOrEmpty(token))
                 {
                     continue;
                 }
-                for (int t = 0; t < tokens.Length; t++)
+                for (int i = 0; i < events.Length; i++)
                 {
-                    if (ev.Name.IndexOf(tokens[t], StringComparison.OrdinalIgnoreCase) >= 0)
+                    FsmEvent ev = events[i];
+                    if (ev == null || string.IsNullOrEmpty(ev.Name))
+                    {
+                        continue;
+                    }
+                    if (ev.Name.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         return ev.Name;
                     }
@@ -1553,7 +2357,7 @@ namespace MyWinterCarMpMod.Sync
             return null;
         }
 
-        private void EnqueueDoorEvent(DoorEntry entry, bool open)
+        private void EnqueueDoorEvent(DoorEntry entry, bool open, string eventName)
         {
             if (entry == null)
             {
@@ -1563,7 +2367,8 @@ namespace MyWinterCarMpMod.Sync
             DoorEventData data = new DoorEventData
             {
                 DoorId = entry.Id,
-                Open = open ? (byte)1 : (byte)0
+                Open = open ? (byte)1 : (byte)0,
+                EventName = eventName
             };
             _doorEventQueue.Add(data);
         }
@@ -1582,6 +2387,7 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
+            bool isSorbet = IsSorbetDoor(entry.DebugPath, entry.Transform);
             if (!string.IsNullOrEmpty(triggerEvent))
             {
                 if (string.Equals(triggerEvent, entry.MpOpenEventName, StringComparison.OrdinalIgnoreCase) ||
@@ -1590,30 +2396,79 @@ namespace MyWinterCarMpMod.Sync
                     return;
                 }
             }
-            if (entry.IsVehicleDoor)
+            if (entry.IsVehicleDoor && entry.InteractionKind == InteractionKind.Door && !isSorbet)
             {
                 if (string.IsNullOrEmpty(triggerEvent))
                 {
                     return;
                 }
-                if (!entry.AllowVehiclePlayMaker)
+                if (string.Equals(triggerEvent, "FINISHED", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(triggerEvent, "LOOP", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(triggerEvent, "GLOBALEVENT", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (string.Equals(triggerEvent, "FINISHED", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(triggerEvent, "LOOP", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(triggerEvent, "GLOBALEVENT", StringComparison.OrdinalIgnoreCase))
+                    return;
+                }
+
+                string triggerLower = triggerEvent.ToLowerInvariant();
+                if (triggerLower.IndexOf("open") < 0 && triggerLower.IndexOf("close") < 0)
+                {
+                    return;
+                }
+            }
+
+            if (entry.LastDoorOpen == open)
+            {
+                float debounce = entry.EventOnly ? 0.15f : 0.25f;
+                if (now - entry.LastLocalChangeTime < debounce)
+                {
+                    return;
+                }
+            }
+
+            entry.LastDoorOpen = open;
+            entry.LastLocalChangeTime = now;
+            string eventName = NormalizeDoorEventName(triggerEvent);
+            if (!entry.EventOnly && !string.IsNullOrEmpty(triggerEvent) && IsNoiseEventName(triggerEvent))
+            {
+                return;
+            }
+
+            if (IsScrapeEntry(entry))
+            {
+                // Scrape replication is handled via ScrapeStateData; avoid echoing events.
+                return;
+            }
+            if (entry.EventOnly)
+            {
+                bool isScrape = IsScrapeEntry(entry);
+                bool isHeater = IsSorbetHeaterButton(entry);
+                bool isWindowHeater = isHeater && IsSorbetWindowHeater(entry);
+
+                if (isScrape)
+                {
+                    if (string.IsNullOrEmpty(eventName))
+                    {
+                        return;
+                    }
+                    if (!IsScrapeEvent(eventName))
+                    {
+                        return;
+                    }
+                    open = !string.Equals(eventName, "OFF", StringComparison.OrdinalIgnoreCase);
+                }
+                else if (isHeater && !isWindowHeater)
+                {
+                    if (!IsHeaterStepEvent(eventName))
                     {
                         return;
                     }
                 }
             }
-            if (entry.LastDoorOpen == open && now - entry.LastLocalChangeTime < 0.25f)
+            if (entry.EventOnly && string.IsNullOrEmpty(eventName))
             {
                 return;
             }
-
-            entry.LastDoorOpen = open;
-            entry.LastLocalChangeTime = now;
-            EnqueueDoorEvent(entry, open);
+            EnqueueDoorEvent(entry, open, eventName);
             if (_settings != null && _settings.VerboseLogging.Value && now >= _nextEventLogTime)
             {
                 DebugLog.Verbose("DoorSync: local door event id=" + entry.Id +
@@ -1622,6 +2477,8 @@ namespace MyWinterCarMpMod.Sync
                     " path=" + entry.DebugPath);
                 _nextEventLogTime = now + 1f;
             }
+
+            LogSorbetDetails(entry, "local", triggerEvent);
         }
 
         private static string BuildDoorKey(HingeJoint hinge)
@@ -1718,7 +2575,7 @@ namespace MyWinterCarMpMod.Sync
                 return false;
             }
 
-            return lower.Contains("pivot") || lower.Contains("door") || lower.Contains("hatch") || lower.Contains("boot") || lower.Contains("lid");
+            return lower.Contains("pivot") || lower.Contains("door") || lower.Contains("hatch") || lower.Contains("boot") || lower.Contains("lid") || lower.Contains("trunk");
         }
 
         private static bool IsVehicleDoor(Transform doorTransform, HingeJoint hinge)
@@ -1734,6 +2591,40 @@ namespace MyWinterCarMpMod.Sync
             }
 
             return false;
+        }
+
+        private static Rigidbody FindVehicleBody(Transform doorTransform)
+        {
+            if (doorTransform == null)
+            {
+                return null;
+            }
+
+            Rigidbody[] bodies = doorTransform.GetComponentsInParent<Rigidbody>(true);
+            Rigidbody fallback = null;
+            for (int i = 0; i < bodies.Length; i++)
+            {
+                Rigidbody body = bodies[i];
+                if (body == null)
+                {
+                    continue;
+                }
+                if (body.transform == doorTransform)
+                {
+                    continue;
+                }
+
+                if (body.GetComponent<CarDynamics>() != null ||
+                    body.GetComponent<Drivetrain>() != null ||
+                    body.GetComponent<Axles>() != null)
+                {
+                    return body;
+                }
+
+                fallback = body;
+            }
+
+            return fallback;
         }
 
         private static bool HasVehicleComponent(Transform transform)
@@ -1788,6 +2679,44 @@ namespace MyWinterCarMpMod.Sync
             return false;
         }
 
+        private static string GetFsmName(PlayMakerFSM fsm)
+        {
+            if (fsm == null)
+            {
+                return string.Empty;
+            }
+
+            if (fsm.Fsm != null && !string.IsNullOrEmpty(fsm.Fsm.Name))
+            {
+                return fsm.Fsm.Name;
+            }
+
+            return fsm.FsmName ?? string.Empty;
+        }
+
+        private static string BuildFsmNameHint(PlayMakerFSM fsm)
+        {
+            if (fsm == null)
+            {
+                return string.Empty;
+            }
+
+            string fsmName = GetFsmName(fsm);
+            string goName = fsm.gameObject != null ? fsm.gameObject.name : string.Empty;
+
+            if (string.IsNullOrEmpty(fsmName))
+            {
+                return goName ?? string.Empty;
+            }
+
+            if (string.IsNullOrEmpty(goName) || string.Equals(fsmName, goName, StringComparison.OrdinalIgnoreCase))
+            {
+                return fsmName;
+            }
+
+            return fsmName + " " + goName;
+        }
+
         private static string BuildDebugPath(Transform transform)
         {
             if (transform == null)
@@ -1809,6 +2738,956 @@ namespace MyWinterCarMpMod.Sync
         private static string FormatVec3(Vector3 value)
         {
             return string.Format(CultureInfo.InvariantCulture, "{0:F3},{1:F3},{2:F3}", value.x, value.y, value.z);
+        }
+
+        private static string NormalizeDoorEventName(string eventName)
+        {
+            if (string.IsNullOrEmpty(eventName))
+            {
+                return null;
+            }
+
+            string trimmed = eventName.Trim();
+            if (string.IsNullOrEmpty(trimmed))
+            {
+                return null;
+            }
+
+            if (IsNoiseEventName(trimmed))
+            {
+                return null;
+            }
+
+            return trimmed;
+        }
+
+        private static bool IsNoiseEventName(string eventName)
+        {
+            if (string.IsNullOrEmpty(eventName))
+            {
+                return true;
+            }
+
+            string upper = eventName.ToUpperInvariant();
+            if (upper == "FINISHED" || upper == "LOOP" || upper == "GLOBALEVENT" ||
+                upper == "SAVE" || upper == "SAVEGAME" || upper == "LOAD" || upper == "ASSEMBLE")
+            {
+                return true;
+            }
+
+            if (upper.StartsWith("MWC_MP", StringComparison.OrdinalIgnoreCase) ||
+                upper.StartsWith("MP_", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            bool allDigits = true;
+            for (int i = 0; i < upper.Length; i++)
+            {
+                if (!char.IsDigit(upper[i]))
+                {
+                    allDigits = false;
+                    break;
+                }
+            }
+
+            return allDigits;
+        }
+
+        private static bool IsScrapeEntry(DoorEntry entry)
+        {
+            if (entry == null)
+            {
+                return false;
+            }
+
+            if (entry.Fsm != null && ContainsAnyToken(GetFsmName(entry.Fsm), new[] { "scrape" }))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(entry.DebugPath) && entry.DebugPath.IndexOf("scrape", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(entry.DebugPath))
+            {
+                string lower = entry.DebugPath.ToLowerInvariant();
+                if (lower.Contains("windshield") || lower.Contains("glass") || lower.Contains("windowpivot"))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsSorbetHeaterButton(DoorEntry entry)
+        {
+            if (entry == null || string.IsNullOrEmpty(entry.DebugPath))
+            {
+                return false;
+            }
+
+            string lower = entry.DebugPath.ToLowerInvariant();
+            if (!lower.Contains("sorbet"))
+            {
+                return false;
+            }
+
+            return lower.Contains("buttonheater") || lower.Contains("heater") || lower.Contains("blower") || lower.Contains("windowheater");
+        }
+
+        private void UpdateScrapeState(DoorEntry entry, float now)
+        {
+            if (entry == null || !entry.HasScrapeState)
+            {
+                return;
+            }
+
+            if (now < entry.ScrapeSuppressUntilTime)
+            {
+                return;
+            }
+
+            if (entry.ScrapeLayer == null || entry.ScrapeX == null || entry.ScrapeXold == null || entry.ScrapeDistance == null)
+            {
+                return;
+            }
+
+            int layer = entry.ScrapeLayer.Value;
+            float x = entry.ScrapeX.Value;
+            float xold = entry.ScrapeXold.Value;
+            float dist = entry.ScrapeDistance.Value;
+
+            bool changed = layer != entry.LastScrapeLayer ||
+                Mathf.Abs(x - entry.LastScrapeX) > 0.01f ||
+                Mathf.Abs(xold - entry.LastScrapeXold) > 0.01f ||
+                Mathf.Abs(dist - entry.LastScrapeDistance) > 0.001f;
+
+            if (!changed)
+            {
+                return;
+            }
+
+            entry.LastScrapeLayer = layer;
+            entry.LastScrapeX = x;
+            entry.LastScrapeXold = xold;
+            entry.LastScrapeDistance = dist;
+
+            _scrapeStateQueue.Add(new ScrapeStateData
+            {
+                DoorId = entry.Id,
+                Layer = layer,
+                X = x,
+                Xold = xold,
+                Distance = dist
+            });
+
+            if (_settings != null && _settings.VerboseLogging.Value && now >= _nextScrapeLogTime)
+            {
+                DebugLog.Verbose("DoorSync: scrape state change id=" + entry.Id +
+                    " layer=" + layer +
+                    " x=" + x.ToString("F2") +
+                    " dist=" + dist.ToString("F2") +
+                    " path=" + entry.DebugPath);
+                _nextScrapeLogTime = now + 1f;
+            }
+        }
+
+        private void EnsureScrapeState(DoorEntry entry)
+        {
+            if (entry == null || entry.Fsm == null || entry.Fsm.Fsm == null)
+            {
+                return;
+            }
+
+            if (entry.HasScrapeState || !IsScrapeEntry(entry))
+            {
+                return;
+            }
+
+            entry.ScrapeLayer = FindIntByName(entry.Fsm, "Layer");
+            entry.ScrapeX = FindFloatByName(entry.Fsm, "X");
+            entry.ScrapeXold = FindFloatByName(entry.Fsm, "Xold");
+            entry.ScrapeDistance = FindFloatByName(entry.Fsm, "Distance");
+
+            if (entry.ScrapeLayer == null || entry.ScrapeX == null || entry.ScrapeXold == null || entry.ScrapeDistance == null)
+            {
+                if (_settings != null && _settings.VerboseLogging.Value)
+                {
+                    DebugLog.Verbose("DoorSync: scrape vars missing id=" + entry.Id +
+                        " layer=" + (entry.ScrapeLayer != null) +
+                        " x=" + (entry.ScrapeX != null) +
+                        " xold=" + (entry.ScrapeXold != null) +
+                        " dist=" + (entry.ScrapeDistance != null) +
+                        " path=" + entry.DebugPath);
+                }
+                return;
+            }
+
+            entry.HasScrapeState = true;
+            entry.LastScrapeLayer = entry.ScrapeLayer.Value;
+            entry.LastScrapeX = entry.ScrapeX.Value;
+            entry.LastScrapeXold = entry.ScrapeXold.Value;
+            entry.LastScrapeDistance = entry.ScrapeDistance.Value;
+        }
+
+        private void EnsureSorbetControlBindings()
+        {
+            if (_sorbetBindingsReady)
+            {
+                return;
+            }
+
+            _sorbetControls.Clear();
+            AddSorbetControl(SorbetControl.HeaterTemp, "ButtonHeaterTemp", new[] { "temp", "heat" });
+            AddSorbetControl(SorbetControl.HeaterBlower, "ButtonHeaterBlower", new[] { "blower", "fan" });
+            AddSorbetControl(SorbetControl.HeaterDirection, "ButtonHeaterDirection", new[] { "direction", "vent", "defrost" });
+            AddSorbetControl(SorbetControl.WindowHeater, "ButtonWindowHeater", new[] { "window", "heater", "defrost" });
+            AddSorbetControl(SorbetControl.LightModes, "ButtonLightModes", new[] { "light", "mode" });
+            AddSorbetControl(SorbetControl.Hazard, "ButtonHazard", new[] { "hazard", "indicator" });
+
+            _sorbetBindingsReady = true;
+        }
+
+        private void AddSorbetControl(SorbetControl control, string token, string[] tokens)
+        {
+            DoorEntry entry = FindSorbetEntry(token);
+            SorbetControlBinding binding = new SorbetControlBinding
+            {
+                Control = control,
+                Token = token,
+                Tokens = tokens,
+                Entry = entry
+            };
+
+            if (entry != null && entry.Fsm != null && entry.Fsm.Fsm != null)
+            {
+                ResolveControlVariables(binding);
+            }
+            else if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                DebugLog.Verbose("DoorSync: sorbet control missing " + token);
+            }
+
+            _sorbetControls.Add(binding);
+        }
+
+        private DoorEntry FindSorbetEntry(string token)
+        {
+            if (string.IsNullOrEmpty(token))
+            {
+                return null;
+            }
+
+            for (int i = 0; i < _doors.Count; i++)
+            {
+                DoorEntry entry = _doors[i];
+                if (entry == null || string.IsNullOrEmpty(entry.DebugPath))
+                {
+                    continue;
+                }
+                if (entry.DebugPath.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+                if (entry.DebugPath.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return entry;
+                }
+            }
+            return null;
+        }
+
+        private void ResolveControlVariables(SorbetControlBinding binding)
+        {
+            if (binding == null || binding.Entry == null || binding.Entry.Fsm == null)
+            {
+                return;
+            }
+
+            PlayMakerFSM fsm = binding.Entry.Fsm;
+            binding.IntVar = FindIntByTokens(fsm, binding.Tokens);
+            binding.FloatVar = FindFloatByTokens(fsm, binding.Tokens);
+            binding.BoolVar = PlayMakerBridge.FindBoolByTokens(fsm, binding.Tokens) ??
+                PlayMakerBridge.FindBoolByTokens(fsm, new[] { binding.Token, "on", "off", "enabled" });
+        }
+
+        private void UpdateSorbetControl(List<SorbetControlBinding> bindings, SorbetControl control, float now, out ControlValueKind kind, out float value, ref bool changed, ref byte mask)
+        {
+            kind = ControlValueKind.None;
+            value = 0f;
+
+            SorbetControlBinding binding = FindBinding(bindings, control);
+            if (binding == null || binding.Entry == null || binding.Entry.Fsm == null || binding.Entry.Fsm.Fsm == null)
+            {
+                return;
+            }
+
+            if (binding.SuppressUntilTime > now)
+            {
+                return;
+            }
+
+            if (!IsStateIndexControl(control) && binding.IntVar == null && binding.FloatVar == null && binding.BoolVar == null)
+            {
+                ResolveControlVariables(binding);
+            }
+
+            if (IsStateIndexControl(control))
+            {
+                int stateIndex = GetActiveStateIndex(binding.Entry.Fsm);
+                if (stateIndex >= 0)
+                {
+                    kind = ControlValueKind.StateIndex;
+                    value = stateIndex;
+                }
+                else if (!TryReadControlValue(binding, out kind, out value))
+                {
+                    return;
+                }
+            }
+            else if (!TryReadControlValue(binding, out kind, out value))
+            {
+                return;
+            }
+
+            mask |= (byte)(1 << (int)control);
+
+            bool valueChanged = kind != binding.LastKind || Mathf.Abs(value - binding.LastValue) > 0.001f;
+            if (valueChanged)
+            {
+                binding.LastKind = kind;
+                binding.LastValue = value;
+                if (_settings != null && _settings.VerboseLogging.Value && now >= binding.NextLogTime)
+                {
+                    DebugLog.Verbose("DoorSync: sorbet control change " + control +
+                        " kind=" + kind +
+                        " value=" + value.ToString("F2") +
+                        " path=" + binding.Entry.DebugPath);
+                    binding.NextLogTime = now + 0.75f;
+                }
+                changed = true;
+            }
+        }
+
+        private void ApplySorbetControl(List<SorbetControlBinding> bindings, SorbetControl control, float now, byte mask, ControlValueKind kind, float value)
+        {
+            if ((mask & (1 << (int)control)) == 0)
+            {
+                return;
+            }
+
+            SorbetControlBinding binding = FindBinding(bindings, control);
+            if (binding == null || binding.Entry == null || binding.Entry.Fsm == null || binding.Entry.Fsm.Fsm == null)
+            {
+                return;
+            }
+
+            binding.SuppressUntilTime = now + 0.6f;
+
+            if (binding.IntVar == null && binding.FloatVar == null && binding.BoolVar == null)
+            {
+                ResolveControlVariables(binding);
+            }
+
+            switch (kind)
+            {
+                case ControlValueKind.Bool:
+                    if (binding.BoolVar != null)
+                    {
+                        binding.BoolVar.Value = value > 0.5f;
+                    }
+                    else if (binding.IntVar != null)
+                    {
+                        binding.IntVar.Value = value > 0.5f ? 1 : 0;
+                    }
+                    else if (binding.FloatVar != null)
+                    {
+                        binding.FloatVar.Value = value > 0.5f ? 1f : 0f;
+                    }
+                    SendToggleEvent(binding.Entry.Fsm, value > 0.5f);
+                    break;
+                case ControlValueKind.Int:
+                    if (binding.IntVar != null)
+                    {
+                        binding.IntVar.Value = Mathf.RoundToInt(value);
+                    }
+                    else if (binding.FloatVar != null)
+                    {
+                        binding.FloatVar.Value = value;
+                    }
+                    else if (binding.BoolVar != null)
+                    {
+                        binding.BoolVar.Value = value > 0.5f;
+                    }
+                    break;
+                case ControlValueKind.Float:
+                    if (binding.FloatVar != null)
+                    {
+                        binding.FloatVar.Value = value;
+                    }
+                    else if (binding.IntVar != null)
+                    {
+                        binding.IntVar.Value = Mathf.RoundToInt(value);
+                    }
+                    else if (binding.BoolVar != null)
+                    {
+                        binding.BoolVar.Value = value > 0.5f;
+                    }
+                    break;
+                case ControlValueKind.StateIndex:
+                    TrySetStateIndex(binding.Entry.Fsm, Mathf.RoundToInt(value));
+                    break;
+            }
+
+            binding.LastKind = kind;
+            binding.LastValue = value;
+        }
+
+        private static void SendToggleEvent(PlayMakerFSM fsm, bool on)
+        {
+            if (fsm == null || fsm.Fsm == null)
+            {
+                return;
+            }
+
+            string eventName = on ? "ON" : "OFF";
+            if (fsm.Fsm.HasEvent(eventName))
+            {
+                fsm.SendEvent(eventName);
+            }
+        }
+
+        private static SorbetControlBinding FindBinding(List<SorbetControlBinding> bindings, SorbetControl control)
+        {
+            if (bindings == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < bindings.Count; i++)
+            {
+                SorbetControlBinding binding = bindings[i];
+                if (binding != null && binding.Control == control)
+                {
+                    return binding;
+                }
+            }
+            return null;
+        }
+
+        private static bool TryReadControlValue(SorbetControlBinding binding, out ControlValueKind kind, out float value)
+        {
+            kind = ControlValueKind.None;
+            value = 0f;
+
+            if (binding == null || binding.Entry == null || binding.Entry.Fsm == null || binding.Entry.Fsm.Fsm == null)
+            {
+                return false;
+            }
+
+            if (binding.IntVar != null)
+            {
+                kind = ControlValueKind.Int;
+                value = binding.IntVar.Value;
+                return true;
+            }
+
+            if (binding.FloatVar != null)
+            {
+                kind = ControlValueKind.Float;
+                value = binding.FloatVar.Value;
+                return true;
+            }
+
+            if (binding.BoolVar != null)
+            {
+                kind = ControlValueKind.Bool;
+                value = binding.BoolVar.Value ? 1f : 0f;
+                return true;
+            }
+
+            int stateIndex = GetActiveStateIndex(binding.Entry.Fsm);
+            if (stateIndex >= 0)
+            {
+                kind = ControlValueKind.StateIndex;
+                value = stateIndex;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static int GetActiveStateIndex(PlayMakerFSM fsm)
+        {
+            if (fsm == null || fsm.Fsm == null || fsm.Fsm.ActiveState == null)
+            {
+                return -1;
+            }
+
+            FsmState[] states = fsm.FsmStates;
+            if (states == null)
+            {
+                return -1;
+            }
+
+            for (int i = 0; i < states.Length; i++)
+            {
+                if (states[i] == fsm.Fsm.ActiveState)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private static bool TrySetStateIndex(PlayMakerFSM fsm, int stateIndex)
+        {
+            if (fsm == null || fsm.Fsm == null)
+            {
+                return false;
+            }
+
+            FsmState[] states = fsm.FsmStates;
+            if (states == null || stateIndex < 0 || stateIndex >= states.Length)
+            {
+                return false;
+            }
+
+            int currentIndex = GetActiveStateIndex(fsm);
+            if (currentIndex < 0)
+            {
+                return false;
+            }
+
+            if (currentIndex == stateIndex)
+            {
+                return true;
+            }
+
+            bool forward = stateIndex > currentIndex;
+            string eventName = FindStepEventName(fsm, forward);
+            if (string.IsNullOrEmpty(eventName))
+            {
+                return false;
+            }
+
+            int steps = Mathf.Min(Mathf.Abs(stateIndex - currentIndex), 12);
+            for (int i = 0; i < steps; i++)
+            {
+                fsm.SendEvent(eventName);
+                if (GetActiveStateIndex(fsm) == stateIndex)
+                {
+                    return true;
+                }
+            }
+
+            return GetActiveStateIndex(fsm) == stateIndex;
+        }
+
+        private static string FindStepEventName(PlayMakerFSM fsm, bool forward)
+        {
+            if (fsm == null || fsm.Fsm == null)
+            {
+                return null;
+            }
+
+            string[] candidates = forward
+                ? new[] { "NEXT", "INC", "INCREASE", "PLUS", "UP", "RIGHT" }
+                : new[] { "PREV", "PREVIOUS", "DEC", "DECREASE", "MINUS", "DOWN", "LEFT" };
+
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                string name = candidates[i];
+                if (fsm.Fsm.HasEvent(name))
+                {
+                    return name;
+                }
+            }
+
+            return null;
+        }
+
+        private static FsmInt FindIntByName(PlayMakerFSM fsm, string name)
+        {
+            if (fsm == null || fsm.FsmVariables == null || string.IsNullOrEmpty(name))
+            {
+                return null;
+            }
+
+            FsmInt[] values = fsm.FsmVariables.IntVariables;
+            if (values == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                FsmInt value = values[i];
+                if (value != null && string.Equals(value.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return value;
+                }
+            }
+
+            return null;
+        }
+
+        private static FsmFloat FindFloatByName(PlayMakerFSM fsm, string name)
+        {
+            if (fsm == null || fsm.FsmVariables == null || string.IsNullOrEmpty(name))
+            {
+                return null;
+            }
+
+            FsmFloat[] values = fsm.FsmVariables.FloatVariables;
+            if (values == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                FsmFloat value = values[i];
+                if (value != null && string.Equals(value.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return value;
+                }
+            }
+
+            return null;
+        }
+
+        private static FsmInt FindIntByTokens(PlayMakerFSM fsm, string[] tokens)
+        {
+            if (fsm == null || fsm.FsmVariables == null || tokens == null || tokens.Length == 0)
+            {
+                return null;
+            }
+
+            FsmInt[] values = fsm.FsmVariables.IntVariables;
+            if (values == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                FsmInt value = values[i];
+                if (value == null || string.IsNullOrEmpty(value.Name))
+                {
+                    continue;
+                }
+                if (ContainsAnyToken(value.Name, tokens))
+                {
+                    return value;
+                }
+            }
+
+            return null;
+        }
+
+        private static FsmFloat FindFloatByTokens(PlayMakerFSM fsm, string[] tokens)
+        {
+            if (fsm == null || fsm.FsmVariables == null || tokens == null || tokens.Length == 0)
+            {
+                return null;
+            }
+
+            FsmFloat[] values = fsm.FsmVariables.FloatVariables;
+            if (values == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                FsmFloat value = values[i];
+                if (value == null || string.IsNullOrEmpty(value.Name))
+                {
+                    continue;
+                }
+                if (ContainsAnyToken(value.Name, tokens))
+                {
+                    return value;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsSorbetWindowHeater(DoorEntry entry)
+        {
+            if (entry == null || string.IsNullOrEmpty(entry.DebugPath))
+            {
+                return false;
+            }
+
+            return entry.DebugPath.IndexOf("windowheater", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsStateIndexControl(SorbetControl control)
+        {
+            return control == SorbetControl.HeaterTemp ||
+                control == SorbetControl.HeaterBlower ||
+                control == SorbetControl.HeaterDirection ||
+                control == SorbetControl.LightModes;
+        }
+
+        private static bool IsHeaterStepEvent(string eventName)
+        {
+            if (string.IsNullOrEmpty(eventName))
+            {
+                return false;
+            }
+
+            string upper = eventName.ToUpperInvariant();
+            return upper == "INCREASE" || upper == "DECREASE" ||
+                upper == "INC" || upper == "DEC" ||
+                upper == "PLUS" || upper == "MINUS" ||
+                upper == "NEXT" || upper == "PREV" || upper == "PREVIOUS";
+        }
+
+        private static bool IsScrapeEvent(string eventName)
+        {
+            if (string.IsNullOrEmpty(eventName))
+            {
+                return false;
+            }
+
+            return string.Equals(eventName, "DOWN", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(eventName, "SCRAPE", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(eventName, "OFF", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void LogSorbetDetails(DoorEntry entry, string context, string triggerEvent)
+        {
+            if (_settings == null || !_settings.VerboseLogging.Value || entry == null)
+            {
+                return;
+            }
+
+            if (!IsSorbetDoor(entry.DebugPath, entry.Transform) && !IsScrapeEntry(entry))
+            {
+                return;
+            }
+
+            if (_loggedSorbetEntries.Contains(entry.Id))
+            {
+                return;
+            }
+
+            _loggedSorbetEntries.Add(entry.Id);
+
+            string fsmName = entry.Fsm != null ? GetFsmName(entry.Fsm) : "<null>";
+            string activeState = entry.Fsm != null && entry.Fsm.Fsm != null ? entry.Fsm.Fsm.ActiveStateName : "<null>";
+            DebugLog.Verbose("DoorSync: sorbet debug (" + context + ") id=" + entry.Id +
+                " fsm=" + fsmName +
+                " state=" + activeState +
+                " trigger=" + (triggerEvent ?? "<null>") +
+                " path=" + entry.DebugPath);
+
+            if (entry.Fsm == null || entry.Fsm.Fsm == null)
+            {
+                return;
+            }
+
+            if (IsScrapeEntry(entry))
+            {
+                LogAllFsmVariables(entry.Fsm);
+                LogFsmStatesAndEvents(entry.Fsm);
+            }
+            else
+            {
+                LogSorbetVariables(entry.Fsm, entry.Fsm.FsmVariables.BoolVariables);
+                LogSorbetVariables(entry.Fsm, entry.Fsm.FsmVariables.IntVariables);
+                LogSorbetVariables(entry.Fsm, entry.Fsm.FsmVariables.FloatVariables);
+            }
+        }
+
+        private void LogSorbetVariables(PlayMakerFSM fsm, FsmBool[] variables)
+        {
+            if (fsm == null || variables == null || variables.Length == 0)
+            {
+                return;
+            }
+
+            for (int i = 0; i < variables.Length; i++)
+            {
+                FsmBool variable = variables[i];
+                if (variable == null || string.IsNullOrEmpty(variable.Name))
+                {
+                    continue;
+                }
+
+                if (!ContainsAnyToken(variable.Name, SorbetVarTokens))
+                {
+                    continue;
+                }
+
+                DebugLog.Verbose("DoorSync: sorbet var bool" +
+                    " fsm=" + GetFsmName(fsm) +
+                    " name=" + variable.Name +
+                    " value=" + variable.Value);
+            }
+        }
+
+        private void LogSorbetVariables(PlayMakerFSM fsm, FsmInt[] variables)
+        {
+            if (fsm == null || variables == null || variables.Length == 0)
+            {
+                return;
+            }
+
+            for (int i = 0; i < variables.Length; i++)
+            {
+                FsmInt variable = variables[i];
+                if (variable == null || string.IsNullOrEmpty(variable.Name))
+                {
+                    continue;
+                }
+
+                if (!ContainsAnyToken(variable.Name, SorbetVarTokens))
+                {
+                    continue;
+                }
+
+                DebugLog.Verbose("DoorSync: sorbet var int" +
+                    " fsm=" + GetFsmName(fsm) +
+                    " name=" + variable.Name +
+                    " value=" + variable.Value);
+            }
+        }
+
+        private void LogSorbetVariables(PlayMakerFSM fsm, FsmFloat[] variables)
+        {
+            if (fsm == null || variables == null || variables.Length == 0)
+            {
+                return;
+            }
+
+            for (int i = 0; i < variables.Length; i++)
+            {
+                FsmFloat variable = variables[i];
+                if (variable == null || string.IsNullOrEmpty(variable.Name))
+                {
+                    continue;
+                }
+
+                if (!ContainsAnyToken(variable.Name, SorbetVarTokens))
+                {
+                    continue;
+                }
+
+                DebugLog.Verbose("DoorSync: sorbet var float" +
+                    " fsm=" + GetFsmName(fsm) +
+                    " name=" + variable.Name +
+                    " value=" + variable.Value.ToString("F3", CultureInfo.InvariantCulture));
+            }
+        }
+
+        private void LogAllFsmVariables(PlayMakerFSM fsm)
+        {
+            if (fsm == null || fsm.Fsm == null)
+            {
+                return;
+            }
+
+            FsmVariables vars = fsm.FsmVariables;
+            if (vars == null)
+            {
+                return;
+            }
+
+            FsmBool[] bools = vars.BoolVariables;
+            if (bools != null)
+            {
+                for (int i = 0; i < bools.Length; i++)
+                {
+                    FsmBool variable = bools[i];
+                    if (variable == null || string.IsNullOrEmpty(variable.Name))
+                    {
+                        continue;
+                    }
+                    DebugLog.Verbose("DoorSync: sorbet var bool fsm=" + GetFsmName(fsm) +
+                        " name=" + variable.Name +
+                        " value=" + variable.Value);
+                }
+            }
+
+            FsmInt[] ints = vars.IntVariables;
+            if (ints != null)
+            {
+                for (int i = 0; i < ints.Length; i++)
+                {
+                    FsmInt variable = ints[i];
+                    if (variable == null || string.IsNullOrEmpty(variable.Name))
+                    {
+                        continue;
+                    }
+                    DebugLog.Verbose("DoorSync: sorbet var int fsm=" + GetFsmName(fsm) +
+                        " name=" + variable.Name +
+                        " value=" + variable.Value);
+                }
+            }
+
+            FsmFloat[] floats = vars.FloatVariables;
+            if (floats != null)
+            {
+                for (int i = 0; i < floats.Length; i++)
+                {
+                    FsmFloat variable = floats[i];
+                    if (variable == null || string.IsNullOrEmpty(variable.Name))
+                    {
+                        continue;
+                    }
+                    DebugLog.Verbose("DoorSync: sorbet var float fsm=" + GetFsmName(fsm) +
+                        " name=" + variable.Name +
+                        " value=" + variable.Value.ToString("F3", CultureInfo.InvariantCulture));
+                }
+            }
+        }
+
+        private void LogFsmStatesAndEvents(PlayMakerFSM fsm)
+        {
+            if (fsm == null || fsm.Fsm == null)
+            {
+                return;
+            }
+
+            FsmState[] states = fsm.Fsm.States;
+            if (states != null && states.Length > 0)
+            {
+                List<string> names = new List<string>();
+                for (int i = 0; i < states.Length && i < 20; i++)
+                {
+                    if (states[i] != null && !string.IsNullOrEmpty(states[i].Name))
+                    {
+                        names.Add(states[i].Name);
+                    }
+                }
+                DebugLog.Verbose("DoorSync: sorbet fsm states fsm=" + GetFsmName(fsm) +
+                    " states=" + string.Join(", ", names.ToArray()));
+            }
+
+            FsmEvent[] events = fsm.Fsm.Events;
+            if (events != null && events.Length > 0)
+            {
+                List<string> names = new List<string>();
+                for (int i = 0; i < events.Length && i < 20; i++)
+                {
+                    if (events[i] != null && !string.IsNullOrEmpty(events[i].Name))
+                    {
+                        names.Add(events[i].Name);
+                    }
+                }
+                DebugLog.Verbose("DoorSync: sorbet fsm events fsm=" + GetFsmName(fsm) +
+                    " events=" + string.Join(", ", names.ToArray()));
+            }
         }
 
         private static uint HashPath(string path)
@@ -1891,6 +3770,25 @@ namespace MyWinterCarMpMod.Sync
             Phone = 2
         }
 
+        private enum SorbetControl
+        {
+            HeaterTemp = 0,
+            HeaterBlower = 1,
+            HeaterDirection = 2,
+            WindowHeater = 3,
+            LightModes = 4,
+            Hazard = 5
+        }
+
+        private enum ControlValueKind : byte
+        {
+            None = 0,
+            Bool = 1,
+            Int = 2,
+            Float = 3,
+            StateIndex = 4
+        }
+
         private sealed class DoorEntry
         {
             public uint Id;
@@ -1899,6 +3797,7 @@ namespace MyWinterCarMpMod.Sync
             public Transform Transform;
             public Rigidbody Rigidbody;
             public HingeJoint Hinge;
+            public Rigidbody VehicleBody;
             public Quaternion BaseLocalRotation;
             public Quaternion LastSentRotation;
             public Quaternion LastAppliedRotation;
@@ -1920,6 +3819,7 @@ namespace MyWinterCarMpMod.Sync
             public PlayMakerFSM Fsm;
             public FsmBool DoorOpenBool;
             public bool HasPlayMaker;
+            public bool EventOnly;
             public bool IsVehicleDoor;
             public bool SkipRotationSync;
             public bool SkipHingeSync;
@@ -1932,6 +3832,32 @@ namespace MyWinterCarMpMod.Sync
             public bool LastDoorOpen;
             public float SuppressPlayMakerUntilTime;
             public uint LastRemoteEventSequence;
+            public bool HasScrapeState;
+            public FsmInt ScrapeLayer;
+            public FsmFloat ScrapeX;
+            public FsmFloat ScrapeXold;
+            public FsmFloat ScrapeDistance;
+            public int LastScrapeLayer;
+            public float LastScrapeX;
+            public float LastScrapeXold;
+            public float LastScrapeDistance;
+            public uint LastRemoteScrapeSequence;
+            public float ScrapeSuppressUntilTime;
+        }
+
+        private sealed class SorbetControlBinding
+        {
+            public SorbetControl Control;
+            public string Token;
+            public string[] Tokens;
+            public DoorEntry Entry;
+            public FsmInt IntVar;
+            public FsmFloat FloatVar;
+            public FsmBool BoolVar;
+            public ControlValueKind LastKind;
+            public float LastValue;
+            public float NextLogTime;
+            public float SuppressUntilTime;
         }
 
         private sealed class DoorCandidate
@@ -1963,13 +3889,21 @@ namespace MyWinterCarMpMod.Sync
             {
                 Finish();
 
-                if (State == null || State.Fsm == null || State.Fsm.LastTransition == null)
+                if (State == null || State.Fsm == null)
                 {
                     return;
                 }
 
-                string trigger = State.Fsm.LastTransition.EventName;
-                if (!string.IsNullOrEmpty(_expectedEvent) && !string.Equals(trigger, _expectedEvent, StringComparison.OrdinalIgnoreCase))
+                string trigger = null;
+                if (State.Fsm.LastTransition != null)
+                {
+                    trigger = State.Fsm.LastTransition.EventName;
+                    if (!string.IsNullOrEmpty(_expectedEvent) && !string.Equals(trigger, _expectedEvent, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return;
+                    }
+                }
+                else if (!string.IsNullOrEmpty(_expectedEvent))
                 {
                     return;
                 }
@@ -1977,6 +3911,75 @@ namespace MyWinterCarMpMod.Sync
                 if (_owner != null)
                 {
                     _owner.NotifyDoorPlayMaker(_doorId, _open, trigger);
+                }
+            }
+        }
+
+        private sealed class DoorPlayMakerEventAction : FsmStateAction
+        {
+            private readonly DoorSync _owner;
+            private readonly uint _doorId;
+            private readonly string[] _openTokens;
+            private readonly string[] _closeTokens;
+            private readonly bool _allowAnyEvent;
+
+            public DoorPlayMakerEventAction(DoorSync owner, uint doorId, string[] openTokens, string[] closeTokens, bool allowAnyEvent)
+            {
+                _owner = owner;
+                _doorId = doorId;
+                _openTokens = openTokens;
+                _closeTokens = closeTokens;
+                _allowAnyEvent = allowAnyEvent;
+            }
+
+            public override void OnEnter()
+            {
+                Finish();
+
+                if (State == null || State.Fsm == null || State.Fsm.LastTransition == null)
+                {
+                    return;
+                }
+
+                string trigger = State.Fsm.LastTransition.EventName;
+                if (string.IsNullOrEmpty(trigger))
+                {
+                    return;
+                }
+
+                if (string.Equals(trigger, "FINISHED", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(trigger, "LOOP", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(trigger, "GLOBALEVENT", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                if (trigger.StartsWith("MWC_MP", StringComparison.OrdinalIgnoreCase) ||
+                    trigger.StartsWith("MP_", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                bool isOpen = ContainsAnyToken(trigger, _openTokens);
+                bool isClose = ContainsAnyToken(trigger, _closeTokens);
+                if (!isOpen && !isClose)
+                {
+                    if (!_allowAnyEvent)
+                    {
+                        return;
+                    }
+
+                    if (_owner != null)
+                    {
+                        _owner.NotifyDoorPlayMaker(_doorId, true, trigger);
+                    }
+                    return;
+                }
+
+                bool open = isOpen && !isClose ? true : (!isOpen && isClose ? false : isOpen);
+                if (_owner != null)
+                {
+                    _owner.NotifyDoorPlayMaker(_doorId, open, trigger);
                 }
             }
         }

@@ -22,10 +22,14 @@ namespace MyWinterCarMpMod.Net
         private readonly System.Collections.Generic.List<DoorHingeStateData> _doorHingeSendBuffer = new System.Collections.Generic.List<DoorHingeStateData>(32);
         private readonly VehicleSync _vehicleSync;
         private readonly TimeOfDaySync _timeSync;
+        private readonly NpcSync _npcSync;
         private readonly System.Collections.Generic.List<VehicleStateData> _vehicleSendBuffer = new System.Collections.Generic.List<VehicleStateData>(16);
+        private readonly System.Collections.Generic.List<VehicleSeatData> _seatSendBuffer = new System.Collections.Generic.List<VehicleSeatData>(8);
         private readonly PickupSync _pickupSync;
         private readonly System.Collections.Generic.List<PickupStateData> _pickupSendBuffer = new System.Collections.Generic.List<PickupStateData>(32);
+        private readonly System.Collections.Generic.List<NpcStateData> _npcSendBuffer = new System.Collections.Generic.List<NpcStateData>(32);
         private readonly System.Collections.Generic.List<DoorEventData> _doorEventSendBuffer = new System.Collections.Generic.List<DoorEventData>(16);
+        private readonly System.Collections.Generic.List<ScrapeStateData> _scrapeSendBuffer = new System.Collections.Generic.List<ScrapeStateData>(16);
         private readonly System.Collections.Generic.List<OwnershipUpdateData> _ownershipUpdateBuffer = new System.Collections.Generic.List<OwnershipUpdateData>(16);
 
         private bool _running;
@@ -48,8 +52,12 @@ namespace MyWinterCarMpMod.Net
         private uint _doorHingeSequence;
         private uint _timeSequence;
         private uint _vehicleSequence;
+        private uint _seatSequence;
         private uint _doorEventSequence;
+        private uint _scrapeSequence;
+        private uint _dashboardSequence;
         private uint _pickupSequence;
+        private uint _npcSequence;
         private PlayerStateData _latestClientState;
         private bool _hasClientState;
         private float _nextStateLogTime;
@@ -60,10 +68,12 @@ namespace MyWinterCarMpMod.Net
         private bool _worldStateAcked;
         private float _nextWorldStateTime;
         private int _worldStateAttempts;
+        private bool _pendingScrapeSnapshot;
+        private float _nextScrapeSnapshotTime;
         private float _nextPlayerSendLogTime;
         private float _nextPlayerReceiveLogTime;
 
-        public HostSession(ITransport transport, Settings settings, LevelSync levelSync, DoorSync doorSync, VehicleSync vehicleSync, PickupSync pickupSync, TimeOfDaySync timeSync, ManualLogSource log, string buildId, string modVersion)
+        public HostSession(ITransport transport, Settings settings, LevelSync levelSync, DoorSync doorSync, VehicleSync vehicleSync, PickupSync pickupSync, TimeOfDaySync timeSync, NpcSync npcSync, ManualLogSource log, string buildId, string modVersion)
         {
             _transport = transport;
             _settings = settings;
@@ -72,6 +82,7 @@ namespace MyWinterCarMpMod.Net
             _vehicleSync = vehicleSync;
             _pickupSync = pickupSync;
             _timeSync = timeSync;
+            _npcSync = npcSync;
             _log = log;
             _verbose = settings.VerboseLogging.Value;
             _buildId = buildId ?? string.Empty;
@@ -152,8 +163,12 @@ namespace MyWinterCarMpMod.Net
             _doorHingeSequence = 0;
             _timeSequence = 0;
             _vehicleSequence = 0;
+            _seatSequence = 0;
             _doorEventSequence = 0;
+            _scrapeSequence = 0;
+            _dashboardSequence = 0;
             _pickupSequence = 0;
+            _npcSequence = 0;
             _hasClientState = false;
             _clientSceneReady = false;
             _clientSceneLevelIndex = int.MinValue;
@@ -255,12 +270,16 @@ namespace MyWinterCarMpMod.Net
                         SendDoorStates(now);
                         SendDoorHingeStates(now);
                         SendDoorEvents();
+                        SendScrapeStates(now);
+                        SendSorbetDashboardState(now);
+                        SendVehicleSeatEvents();
                         SendTimeState(now);
                     }
                     if (_clientSceneReady && _worldStateAcked)
                     {
                         SendVehicleStates(now);
                         SendPickupStates(now);
+                        SendNpcStates(now);
                         SendOwnershipUpdates();
                     }
                 }
@@ -422,6 +441,18 @@ namespace MyWinterCarMpMod.Net
                         _doorSync.ApplyRemoteEvent(message.DoorEvent);
                     }
                     break;
+                case MessageType.ScrapeState:
+                    if (_doorSync != null)
+                    {
+                        _doorSync.ApplyRemoteScrapeState(message.ScrapeState);
+                    }
+                    break;
+                case MessageType.SorbetDashboardState:
+                    if (_doorSync != null)
+                    {
+                        _doorSync.ApplySorbetDashboardState(message.SorbetDashboardState);
+                    }
+                    break;
                 case MessageType.SceneReady:
                     HandleSceneReady(message.SceneReady);
                     break;
@@ -429,6 +460,18 @@ namespace MyWinterCarMpMod.Net
                     if (_vehicleSync != null && _settings.VehicleSyncClientSend.Value)
                     {
                         _vehicleSync.ApplyRemote(message.VehicleState, OwnerKind.Host, true);
+                    }
+                    break;
+                case MessageType.VehicleControl:
+                    if (_vehicleSync != null && _settings.VehicleSyncClientSend.Value)
+                    {
+                        _vehicleSync.ApplyRemoteControl(message.VehicleControl, OwnerKind.Host);
+                    }
+                    break;
+                case MessageType.VehicleSeat:
+                    if (_vehicleSync != null && _settings.VehicleSyncClientSend.Value)
+                    {
+                        _vehicleSync.ApplyRemoteSeat(message.VehicleSeat);
                     }
                     break;
                 case MessageType.PickupState:
@@ -467,6 +510,7 @@ namespace MyWinterCarMpMod.Net
                 _awaitWorldStateAck = true;
                 _worldStateAttempts = 0;
                 _nextWorldStateTime = Time.realtimeSinceStartup;
+                ScheduleScrapeSnapshot("client scene ready");
                 if (_log != null)
                 {
                     _log.LogInfo("Client scene ready: " + _clientSceneLevelName + " (" + _clientSceneLevelIndex + ")");
@@ -493,6 +537,7 @@ namespace MyWinterCarMpMod.Net
 
             _awaitWorldStateAck = false;
             _worldStateAcked = true;
+            _pendingScrapeSnapshot = false;
             if (_log != null)
             {
                 _log.LogInfo("World state acknowledged by client. Attempts=" + _worldStateAttempts + " Session=" + _sessionId);
@@ -508,6 +553,7 @@ namespace MyWinterCarMpMod.Net
 
             _awaitWorldStateAck = false;
             _worldStateAcked = true;
+            _pendingScrapeSnapshot = false;
             if (_log != null)
             {
                 _log.LogInfo("World state acknowledged (implicit: " + reason + "). Attempts=" + _worldStateAttempts + " Session=" + _sessionId);
@@ -563,6 +609,7 @@ namespace MyWinterCarMpMod.Net
             _doorHingeSequence = 0;
             _timeSequence = 0;
             _vehicleSequence = 0;
+            _seatSequence = 0;
             _doorEventSequence = 0;
             _pickupSequence = 0;
             _awaitWorldStateAck = false;
@@ -750,6 +797,109 @@ namespace MyWinterCarMpMod.Net
             }
         }
 
+        private void SendScrapeStates(float now)
+        {
+            if (_doorSync == null || !_doorSync.Enabled)
+            {
+                return;
+            }
+
+            if (_pendingScrapeSnapshot)
+            {
+                if (now < _nextScrapeSnapshotTime)
+                {
+                    return;
+                }
+
+                int snapshotCount = _doorSync.CollectScrapeSnapshot(_scrapeSendBuffer);
+                _pendingScrapeSnapshot = false;
+                if (snapshotCount > 0)
+                {
+                    SendScrapeBuffer(snapshotCount);
+                    if (_verbose && now >= _nextPlayerSendLogTime)
+                    {
+                        DebugLog.Verbose("Host: sent scrape snapshot (" + snapshotCount + ").");
+                        _nextPlayerSendLogTime = now + 1f;
+                    }
+                }
+                return;
+            }
+
+            int count = _doorSync.CollectScrapeStates(_scrapeSendBuffer);
+            if (count == 0)
+            {
+                return;
+            }
+
+            SendScrapeBuffer(count);
+
+            if (_verbose && now >= _nextPlayerSendLogTime)
+            {
+                DebugLog.Verbose("Host: sent " + count + " scrape state update(s).");
+            }
+        }
+
+        private void SendScrapeBuffer(int count)
+        {
+            if (count <= 0)
+            {
+                return;
+            }
+
+            long unixTimeMs = GetUnixTimeMs();
+            for (int i = 0; i < count; i++)
+            {
+                ScrapeStateData state = _scrapeSendBuffer[i];
+                _scrapeSequence++;
+                state.SessionId = _sessionId;
+                state.Sequence = _scrapeSequence;
+                state.UnixTimeMs = unixTimeMs;
+                byte[] payload = Protocol.BuildScrapeState(state);
+                _transport.Send(payload, _settings.ReliableForControl.Value);
+            }
+        }
+
+        private void ScheduleScrapeSnapshot(string reason)
+        {
+            _pendingScrapeSnapshot = true;
+            _nextScrapeSnapshotTime = Time.realtimeSinceStartup + 1f;
+            if (_verbose)
+            {
+                DebugLog.Verbose("Host: scheduled scrape snapshot (" + reason + ").");
+            }
+        }
+
+        private void SendSorbetDashboardState(float now)
+        {
+            if (_doorSync == null || !_doorSync.Enabled || _vehicleSync == null || !_vehicleSync.Enabled)
+            {
+                return;
+            }
+
+            uint vehicleId;
+            if (!_vehicleSync.TryGetLocalSorbetVehicleId(now, out vehicleId))
+            {
+                return;
+            }
+
+            SorbetDashboardStateData state;
+            if (!_doorSync.TryBuildSorbetDashboardState(GetUnixTimeMs(), vehicleId, true, out state))
+            {
+                return;
+            }
+
+            _dashboardSequence++;
+            state.SessionId = _sessionId;
+            state.Sequence = _dashboardSequence;
+            byte[] payload = Protocol.BuildSorbetDashboardState(state);
+            _transport.Send(payload, _settings.ReliableForControl.Value);
+
+            if (_verbose && now >= _nextPlayerSendLogTime)
+            {
+                DebugLog.Verbose("Host: sent sorbet dashboard state mask=" + state.Mask);
+            }
+        }
+
         private void SendTimeState(float now)
         {
             if (_timeSync == null || !_timeSync.Enabled)
@@ -803,6 +953,35 @@ namespace MyWinterCarMpMod.Net
             }
         }
 
+        private void SendVehicleSeatEvents()
+        {
+            if (_vehicleSync == null || !_vehicleSync.Enabled)
+            {
+                return;
+            }
+
+            int count = _vehicleSync.CollectSeatEvents(_seatSendBuffer);
+            if (count <= 0)
+            {
+                return;
+            }
+
+            long unixTimeMs = GetUnixTimeMs();
+            for (int i = 0; i < count; i++)
+            {
+                VehicleSeatData state = _seatSendBuffer[i];
+                _seatSequence++;
+                state.SessionId = _sessionId;
+                state.Sequence = _seatSequence;
+                if (state.UnixTimeMs == 0)
+                {
+                    state.UnixTimeMs = unixTimeMs;
+                }
+                byte[] payload = Protocol.BuildVehicleSeat(state);
+                _transport.Send(payload, _settings.ReliableForControl.Value);
+            }
+        }
+
         private void SendPickupStates(float now)
         {
             if (_pickupSync == null || !_pickupSync.Enabled)
@@ -819,6 +998,26 @@ namespace MyWinterCarMpMod.Net
                 state.SessionId = _sessionId;
                 state.Sequence = _pickupSequence;
                 byte[] payload = Protocol.BuildPickupState(state);
+                _transport.Send(payload, false);
+            }
+        }
+
+        private void SendNpcStates(float now)
+        {
+            if (_npcSync == null || !_npcSync.Enabled)
+            {
+                return;
+            }
+
+            long unixTimeMs = GetUnixTimeMs();
+            int count = _npcSync.CollectChanges(unixTimeMs, now, _npcSendBuffer, OwnerKind.Host);
+            for (int i = 0; i < count; i++)
+            {
+                NpcStateData state = _npcSendBuffer[i];
+                _npcSequence++;
+                state.SessionId = _sessionId;
+                state.Sequence = _npcSequence;
+                byte[] payload = Protocol.BuildNpcState(state);
                 _transport.Send(payload, false);
             }
         }
@@ -875,6 +1074,7 @@ namespace MyWinterCarMpMod.Net
             DoorHingeStateData[] doorHinges = _doorSync != null ? _doorSync.BuildHingeSnapshot(unixTimeMs, _sessionId) : new DoorHingeStateData[0];
             VehicleStateData[] vehicles = _vehicleSync != null ? _vehicleSync.BuildSnapshot(unixTimeMs, _sessionId) : new VehicleStateData[0];
             PickupStateData[] pickups = _pickupSync != null ? _pickupSync.BuildSnapshot(unixTimeMs, _sessionId) : new PickupStateData[0];
+            NpcStateData[] npcs = _npcSync != null ? _npcSync.BuildSnapshot(unixTimeMs, _sessionId) : new NpcStateData[0];
 
             System.Collections.Generic.List<OwnershipUpdateData> ownershipList = new System.Collections.Generic.List<OwnershipUpdateData>();
             if (_vehicleSync != null)
@@ -900,6 +1100,7 @@ namespace MyWinterCarMpMod.Net
                 DoorHinges = doorHinges,
                 Vehicles = vehicles,
                 Pickups = pickups,
+                Npcs = npcs,
                 Ownership = ownershipList.ToArray()
             };
 
@@ -922,12 +1123,16 @@ namespace MyWinterCarMpMod.Net
             {
                 _pickupSequence = 1;
             }
+            if (_npcSequence < 1)
+            {
+                _npcSequence = 1;
+            }
 
             if (_log != null)
             {
-                _log.LogDebug("WorldState sending attempt " + _worldStateAttempts + " Session=" + _sessionId + " Doors=" + doors.Length + " DoorHinges=" + doorHinges.Length + " Vehicles=" + vehicles.Length + " Pickups=" + pickups.Length + " Ownership=" + ownershipList.Count);
+                _log.LogDebug("WorldState sending attempt " + _worldStateAttempts + " Session=" + _sessionId + " Doors=" + doors.Length + " DoorHinges=" + doorHinges.Length + " Vehicles=" + vehicles.Length + " Pickups=" + pickups.Length + " Npcs=" + npcs.Length + " Ownership=" + ownershipList.Count);
             }
-            DebugLog.Verbose("WorldState sent. Doors=" + doors.Length + " DoorHinges=" + doorHinges.Length + " Vehicles=" + vehicles.Length + " Pickups=" + pickups.Length + " Ownership=" + ownershipList.Count);
+            DebugLog.Verbose("WorldState sent. Doors=" + doors.Length + " DoorHinges=" + doorHinges.Length + " Vehicles=" + vehicles.Length + " Pickups=" + pickups.Length + " Npcs=" + npcs.Length + " Ownership=" + ownershipList.Count);
         }
 
         private void ResetConnection(string status)
@@ -941,8 +1146,10 @@ namespace MyWinterCarMpMod.Net
             _outSequence = 0;
             _lastClientSequence = 0;
             _vehicleSequence = 0;
+            _seatSequence = 0;
             _doorHingeSequence = 0;
             _timeSequence = 0;
+            _npcSequence = 0;
             _clientSceneReady = false;
             _clientSceneLevelIndex = int.MinValue;
             _clientSceneLevelName = string.Empty;

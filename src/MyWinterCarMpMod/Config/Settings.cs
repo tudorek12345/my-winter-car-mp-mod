@@ -32,6 +32,8 @@ namespace MyWinterCarMpMod.Config
         public ConfigEntry<string> RemoteAvatarAssetName;
         public ConfigEntry<float> RemoteAvatarScale;
         public ConfigEntry<float> RemoteAvatarYOffset;
+        public ConfigEntry<bool> DevMenuEnabled;
+        public ConfigEntry<float> DevFreecamSpeed;
 
         public ConfigEntry<ulong> SpectatorHostSteamId;
         public ConfigEntry<ulong> AllowOnlySteamId;
@@ -63,6 +65,14 @@ namespace MyWinterCarMpMod.Config
         public ConfigEntry<float> PickupPositionThreshold;
         public ConfigEntry<float> PickupRotationThreshold;
         public ConfigEntry<string> PickupNameFilter;
+        public ConfigEntry<bool> NpcSyncEnabled;
+        public ConfigEntry<int> NpcSendHz;
+        public ConfigEntry<float> NpcPositionThreshold;
+        public ConfigEntry<float> NpcRotationThreshold;
+        public ConfigEntry<string> NpcNameFilter;
+        public ConfigEntry<string> NpcVehicleFilter;
+        public ConfigEntry<bool> NpcDisablePhysicsOnClient;
+        public ConfigEntry<bool> NpcAuthorityHostOnly;
         public ConfigEntry<bool> TimeSyncEnabled;
         public ConfigEntry<int> TimeSyncSendHz;
         public ConfigEntry<string> TimeSyncLightFilter;
@@ -95,7 +105,9 @@ namespace MyWinterCarMpMod.Config
             RemoteAvatarBundlePath = config.Bind("Avatar", "BundlePath", "", "Optional AssetBundle path for a static remote avatar mesh/prefab.");
             RemoteAvatarAssetName = config.Bind("Avatar", "AssetName", "", "Prefab or Mesh name inside the avatar AssetBundle.");
             RemoteAvatarScale = config.Bind("Avatar", "Scale", 1.0f, "Scale for the remote avatar mesh.");
-            RemoteAvatarYOffset = config.Bind("Avatar", "YOffset", 0.0f, "Vertical offset for the remote avatar mesh.");
+            RemoteAvatarYOffset = config.Bind("Avatar", "YOffset", 0.6f, "Vertical offset for the remote avatar mesh.");
+            DevMenuEnabled = config.Bind("DevTools", "Enabled", true, "Enable dev menu overlay (F5).");
+            DevFreecamSpeed = config.Bind("DevTools", "FreecamSpeed", 6f, "Freecam movement speed.");
 
             SpectatorHostSteamId = config.Bind("SteamP2P", "SpectatorHostSteamId", 0ul, "Client sets host SteamID64 (0 to show in overlay).");
             AllowOnlySteamId = config.Bind("SteamP2P", "AllowOnlySteamId", 0ul, "Host allowlist SteamID64 (0 allows first client).");
@@ -112,13 +124,13 @@ namespace MyWinterCarMpMod.Config
             DoorPlayMakerEnabled = config.Bind("DoorSync", "PlayMakerEvents", true, "Use PlayMaker door open/close events when available.");
             DoorSendHz = config.Bind("DoorSync", "SendHz", 10, "Door state send rate in Hz (1-30).");
             DoorAngleThreshold = config.Bind("DoorSync", "AngleThreshold", 1.0f, "Minimum angle change (degrees) before sending.");
-            DoorNameFilter = config.Bind("DoorSync", "NameFilter", "door,ovi,tap,faucet,sink,phone,telephone,fridge,freezer,refrigerator,icebox", "Case-insensitive name filter for door objects (empty = all hinges). Comma-separated tokens.");
+            DoorNameFilter = config.Bind("DoorSync", "NameFilter", "door,ovi,hatch,boot,lid,gate,trunk,hood,bonnet,tap,faucet,sink,ignition,starter,engine,key,light,lights,headlight,headlights,beam,wiper,wipers,indicator,signal,turn,hazard,phone,telephone,fridge,freezer,refrigerator,icebox", "Case-insensitive name filter for door objects (empty = all hinges). Comma-separated tokens.");
 
             VehicleSyncEnabled = config.Bind("VehicleSync", "Enabled", true, "Sync vehicle rigidbody states (experimental).");
             VehicleSyncClientSend = config.Bind("VehicleSync", "ClientSend", true, "Allow clients to send vehicle states (experimental).");
             VehicleOwnershipEnabled = config.Bind("VehicleSync", "OwnershipEnabled", true, "Allow client to request vehicle control.");
-            VehicleSeatDistance = config.Bind("VehicleSync", "SeatDistance", 1.2f, "Distance (meters) to detect driver seat.");
-            VehicleSendHz = config.Bind("VehicleSync", "SendHz", 10, "Vehicle state send rate in Hz (1-30).");
+            VehicleSeatDistance = config.Bind("VehicleSync", "SeatDistance", 1.5f, "Distance (meters) to detect driver seat.");
+            VehicleSendHz = config.Bind("VehicleSync", "SendHz", 20, "Vehicle state send rate in Hz (1-30).");
             VehiclePositionThreshold = config.Bind("VehicleSync", "PositionThreshold", 0.05f, "Minimum position delta before sending (meters).");
             VehicleRotationThreshold = config.Bind("VehicleSync", "RotationThreshold", 1.0f, "Minimum rotation delta before sending (degrees).");
             VehicleNameFilter = config.Bind("VehicleSync", "NameFilter", "sorbet", "Optional name filter for vehicles (comma-separated). Empty = all.");
@@ -128,6 +140,15 @@ namespace MyWinterCarMpMod.Config
             PickupPositionThreshold = config.Bind("PickupSync", "PositionThreshold", 0.02f, "Minimum position delta before sending (meters).");
             PickupRotationThreshold = config.Bind("PickupSync", "RotationThreshold", 2.0f, "Minimum rotation delta before sending (degrees).");
             PickupNameFilter = config.Bind("PickupSync", "NameFilter", "", "Optional name filter for pickup objects (comma-separated).");
+
+            NpcSyncEnabled = config.Bind("NpcSync", "Enabled", true, "Sync NPC/traffic positions from host to clients.");
+            NpcSendHz = config.Bind("NpcSync", "SendHz", 6, "NPC state send rate in Hz (1-15).");
+            NpcPositionThreshold = config.Bind("NpcSync", "PositionThreshold", 0.05f, "Minimum NPC position delta before sending (meters).");
+            NpcRotationThreshold = config.Bind("NpcSync", "RotationThreshold", 2.0f, "Minimum NPC rotation delta before sending (degrees).");
+            NpcNameFilter = config.Bind("NpcSync", "NameFilter", "nappo,pub,bar,npc", "NPC name tokens to sync (comma-separated).");
+            NpcVehicleFilter = config.Bind("NpcSync", "VehicleFilter", "traffic,ai,bus,taxi,truck,van", "Traffic vehicle name tokens to sync (comma-separated).");
+            NpcDisablePhysicsOnClient = config.Bind("NpcSync", "DisablePhysicsOnClient", true, "Force NPC rigidbodies kinematic on clients.");
+            NpcAuthorityHostOnly = config.Bind("NpcSync", "HostAuthorityOnly", true, "Host simulates NPC/traffic; clients only receive transforms.");
 
             TimeSyncEnabled = config.Bind("TimeSync", "Enabled", true, "Sync time-of-day lighting (directional light + ambient).");
             TimeSyncSendHz = config.Bind("TimeSync", "SendHz", 1, "Time sync send rate in Hz (1-10).");
@@ -311,6 +332,40 @@ namespace MyWinterCarMpMod.Config
         public string GetPickupNameFilter()
         {
             return PickupNameFilter.Value ?? string.Empty;
+        }
+
+        public int GetNpcSendHz()
+        {
+            int hz = NpcSendHz.Value;
+            if (hz < 1)
+            {
+                hz = 1;
+            }
+            if (hz > 15)
+            {
+                hz = 15;
+            }
+            return hz;
+        }
+
+        public float GetNpcPositionThreshold()
+        {
+            return ClampMin(NpcPositionThreshold.Value, 0.01f);
+        }
+
+        public float GetNpcRotationThreshold()
+        {
+            return ClampMin(NpcRotationThreshold.Value, 0.5f);
+        }
+
+        public string GetNpcNameFilter()
+        {
+            return NpcNameFilter.Value ?? string.Empty;
+        }
+
+        public string GetNpcVehicleFilter()
+        {
+            return NpcVehicleFilter.Value ?? string.Empty;
         }
 
         public int GetTimeSyncSendHz()

@@ -175,3 +175,5 @@ tools/netfx-ref/Microsoft.NETFramework.ReferenceAssemblies.net35.1.0.3/build/.NE
 tools/netfx-ref/Microsoft.NETFramework.ReferenceAssemblies.net35.1.0.3/build/.NETFramework/v3.5/SubsetList/Client.xml
 tools/netfx-ref/Microsoft.NETFramework.ReferenceAssemblies.net35.1.0.3/package/services/metadata/core-properties/a1a4c4ab39944ec5986476c240ee62d2.psmdcp
 System.Management.Automation.Internal.Host.InternalHost
+conversationscodexcontext.mwcmp.txt
+tools/launch-mwcmp.ps1
