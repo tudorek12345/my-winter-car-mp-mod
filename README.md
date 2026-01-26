@@ -49,16 +49,8 @@ Local testing (two instances):
 - Set `Compatibility/AllowMultipleInstances = true` and restart the game.
 - This skips Steam bootstrap, so use LAN transport only.
 
-## Config (BepInEx)
-General:
-- `Mode = Host | Client`
-- `Transport = SteamP2P | TcpLan`
-- `SendHz = 20`
-- `SmoothingPosition = 0.15`
-- `SmoothingRotation = 0.15`
-- `OverlayEnabled = true`
-- `VerboseLogging = true` (set false to reduce log noise)
 
+<<<<<<< HEAD
 UI:
 - `MainMenuPanelEnabled = true`
 
@@ -123,6 +115,8 @@ Networking:
 
 Spectator:
 - `SpectatorLockdown = true` (legacy, unused in co-op)
+=======
+>>>>>>> 3e007213e54fa84c0b06e152f2fadf23068a107d
 
 ## Logs
 - BepInEx global log: `BepInEx/LogOutput.log`
@@ -133,15 +127,5 @@ Spectator:
 2. Set `Avatar.BundlePath` to the bundle path and `Avatar.AssetName` to the prefab/mesh name (default: `assets/mpplayermodel/mpplayermodel.fbx`).
 3. Tune `Avatar.Scale` and `Avatar.YOffset` if the model is too big/small or sinks into the ground (auto-ground offset is applied; scale/offset is configurable).
 
-## Dev Guide
-See `instructions.txt` for iteration, build, deploy, and multi-instance notes.
 
-## Build Notes
-- Target framework is .NET Framework 3.5 for older Unity (Mono).
-- Update `GameDir` in `src/MyWinterCarMpMod/MyWinterCarMpMod.csproj` or pass `-p:GameDir=...`.
-- If .NET 3.5 reference assemblies are missing, use the game's Managed folder:
-  ```powershell
-  dotnet build src/MyWinterCarMpMod/MyWinterCarMpMod.csproj -c Release `
-    -p:GameDir="C:\Games\My.Winter.Car\game" `
-    -p:FrameworkPathOverride="C:\Games\My.Winter.Car\game\MyWinterCar_Data\Managed"
-  ```
+
