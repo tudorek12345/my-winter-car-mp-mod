@@ -23,6 +23,7 @@ Sorbet vehicle sync is still WIP: doors sync for both players, driving/ownership
 - Sorbet dashboard/HVAC state replication (heater temp/blower/direction/window heater/lights/hazard).
 - Passenger seat snapping (pos + rot) to reduce in-car lag for remote avatars.
 - NPC/traffic scanning upgraded with delayed rescans and candidate dumps for filter tuning.
+- Both Players can now drive the sorbet with some issues.
 
 
 ## Requirements

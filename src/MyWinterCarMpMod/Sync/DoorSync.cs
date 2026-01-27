@@ -18,6 +18,7 @@ namespace MyWinterCarMpMod.Sync
         private const float RemoteSuppressSeconds = 0.2f;
         private const float RemoteApplySeconds = 0.35f;
         private const float VehicleHingeDeadzone = 3f;
+        private const float EventOnlyRepeatSeconds = 0.45f;
         private static readonly string[] DoorTokens = new[]
         {
             "door", "ovi", "hatch", "hatchback", "boot", "bootlid", "lid", "gate", "trunk", "hood", "bonnet", "fridge", "freezer", "refrigerator", "icebox"
@@ -2463,7 +2464,32 @@ namespace MyWinterCarMpMod.Sync
                         return;
                     }
                 }
+
+                if (!string.IsNullOrEmpty(eventName) && IsUseLikeEvent(eventName))
+                {
+                    bool doorOpen = entry.DoorOpenBool != null ? entry.DoorOpenBool.Value : !entry.LastDoorOpen;
+                    open = doorOpen;
+                    string mapped = doorOpen ? entry.OpenEventName : entry.CloseEventName;
+                    if (!string.IsNullOrEmpty(mapped) && !string.Equals(mapped, eventName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        eventName = mapped;
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(eventName))
+                {
+                    if (string.Equals(eventName, entry.LastEventName, StringComparison.OrdinalIgnoreCase) &&
+                        open == entry.LastEventOpen &&
+                        now - entry.LastEventTime < EventOnlyRepeatSeconds)
+                    {
+                        return;
+                    }
+                    entry.LastEventName = eventName;
+                    entry.LastEventOpen = open;
+                    entry.LastEventTime = now;
+                }
             }
+            entry.LastDoorOpen = open;
             if (entry.EventOnly && string.IsNullOrEmpty(eventName))
             {
                 return;
@@ -2794,11 +2820,30 @@ namespace MyWinterCarMpMod.Sync
             return allDigits;
         }
 
+        private static bool IsUseLikeEvent(string eventName)
+        {
+            if (string.IsNullOrEmpty(eventName))
+            {
+                return false;
+            }
+
+            string upper = eventName.ToUpperInvariant();
+            return upper == "USE" || upper == "PRESS" || upper == "CLICK" || upper == "TOGGLE";
+        }
+
         private static bool IsScrapeEntry(DoorEntry entry)
         {
             if (entry == null)
             {
                 return false;
+            }
+
+            if (entry.Fsm != null && entry.Fsm.Fsm != null)
+            {
+                if (entry.Fsm.Fsm.HasEvent("SCRAPE") || HasAnyEventContainingTokens(entry.Fsm, new[] { "scrape" }))
+                {
+                    return true;
+                }
             }
 
             if (entry.Fsm != null && ContainsAnyToken(GetFsmName(entry.Fsm), new[] { "scrape" }))
@@ -3830,6 +3875,9 @@ namespace MyWinterCarMpMod.Sync
             public string OpenEventName;
             public string CloseEventName;
             public bool LastDoorOpen;
+            public string LastEventName;
+            public bool LastEventOpen;
+            public float LastEventTime;
             public float SuppressPlayMakerUntilTime;
             public uint LastRemoteEventSequence;
             public bool HasScrapeState;
