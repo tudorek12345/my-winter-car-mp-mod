@@ -51,7 +51,7 @@ Local testing (two instances):
 - This skips Steam bootstrap, so use LAN transport only.
 
 
-<<<<<<< HEAD
+
 UI:
 - `MainMenuPanelEnabled = true`
 
@@ -116,8 +116,6 @@ Networking:
 
 Spectator:
 - `SpectatorLockdown = true` (legacy, unused in co-op)
-=======
->>>>>>> 3e007213e54fa84c0b06e152f2fadf23068a107d
 
 ## Logs
 - BepInEx global log: `BepInEx/LogOutput.log`
