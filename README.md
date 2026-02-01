@@ -13,7 +13,7 @@ https://discord.gg/GQeC5tCH2w
 MWCMP avatar bundle integrated with auto-grounding; scale/offset tuned (still configurable).
 Cabin sink/tap and fridge interactions sync.
 Sorbet vehicle sync is still WIP: doors sync for both players, driving/ownership working, dashboard/HVAC + scrape replication added.
-[https://www.reddit.com/r/MyWinterCar/comments/1qt7i33/mwcmp_v015_my_winter_car_multiplayer_first_demo/](https://youtu.be/vUQ-D4gIdTY)
+https://youtu.be/vUQ-D4gIdTY first quick demo ("showcase") 
 ## Recent Progress
 - Swapped the blue capsule for the MWCMP model avatar (static mesh) with grounding and scale tuning.
 - Cabin door sync stabilized (room doors + front/back cabin entrances).
