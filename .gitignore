@@ -177,3 +177,7 @@ tools/netfx-ref/Microsoft.NETFramework.ReferenceAssemblies.net35.1.0.3/package/s
 System.Management.Automation.Internal.Host.InternalHost
 conversationscodexcontext.mwcmp.txt
 tools/launch-mwcmp.ps1
+LaunchClient.bat
+LaunchHost.bat
+LaunchHostClient.bat
+.gitignore
