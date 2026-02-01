@@ -31,6 +31,7 @@ namespace MyWinterCarMpMod.Sync
         private float _remoteSeatLastTime;
         private uint _lastRemoteSeatSequence;
         private const float SeatOwnershipHoldSeconds = 6f;
+        private const float ForceStateSendSeconds = 1.5f;
         private const string SeatEnterFilter = "player in car,player in,playerin,incar,in car,seatbelt,drive,driver,ignition,enable ignition,enter,create player,check speed,reset view";
         private const string SeatExitFilter = "wait,press return,press,exit,leave";
         private const string SeatEnterEventFilter = "player in car,player in,incar,in car,drive,seatbelt,ignition,enter,enable ignition";
@@ -40,11 +41,14 @@ namespace MyWinterCarMpMod.Sync
         private const float RemoteControlTimeoutSeconds = 0.75f;
         private const byte VehicleControlFlagStartEngine = 1;
         private const float RemoteLerpSpeed = 14f;
+        private const float RemoteSeatLerpMultiplier = 1.6f;
         private const float RemoteSnapDistance = 3.5f;
         private const float RemoteSmoothTimeMin = 0.03f;
         private const float RemoteSmoothTimeMax = 0.12f;
         private const float RemoteExtrapolationMax = 0.12f;
         private const float RemoteSteerSmoothTime = 0.1f;
+        private const float InputCacheMaxAgeSeconds = 0.35f;
+        private const float RemoteSeatTimeoutSeconds = 2f;
 
         public VehicleSync(Settings settings)
         {
@@ -81,6 +85,186 @@ namespace MyWinterCarMpMod.Sync
             _lastSceneIndex = levelIndex;
             _lastSceneName = levelName ?? string.Empty;
             ScanVehicles(false);
+        }
+
+        public void UpdateInputCache(float now)
+        {
+            if (!Enabled || _vehicles.Count == 0)
+            {
+                return;
+            }
+
+            EnsureVehiclesValid(now, "input cache");
+
+            Vector3 localPos;
+            bool hasLocal = TryGetLocalPosition(out localPos);
+
+            for (int i = 0; i < _vehicles.Count; i++)
+            {
+                VehicleEntry entry = _vehicles[i];
+                if (entry == null)
+                {
+                    continue;
+                }
+
+                bool rescanned;
+                if (!EnsureVehicleBinding(entry, now, "input cache", out rescanned))
+                {
+                    if (rescanned)
+                    {
+                        return;
+                    }
+                    continue;
+                }
+
+                if (!IsSorbetVehicle(entry))
+                {
+                    continue;
+                }
+
+                EnsureVehicleComponents(entry);
+                RefreshSeatFromFsm(entry, now);
+
+                bool wants = IsLocalDriver(entry, localPos, hasLocal);
+                entry.LocalWantsControl = wants;
+                UpdateSorbetShifterOverride(entry, now, wants);
+                if (!wants)
+                {
+                    entry.InputCacheValid = false;
+                    entry.PendingGearDelta = 0;
+                    entry.PendingStartEngine = false;
+                    entry.PendingShifterGearValid = false;
+                    continue;
+                }
+
+                AxisCarController axis = entry.AxisController;
+                Drivetrain drivetrain = entry.Drivetrain;
+                if (axis == null || drivetrain == null)
+                {
+                    if (_settings != null && _settings.VerboseLogging.Value)
+                    {
+                        if (now - entry.LastAxisLogTime >= 1f)
+                        {
+                            DebugLog.Verbose("VehicleSync: input cache missing components vehicle=" + entry.DebugPath +
+                                " axis=" + (axis != null) +
+                                " drivetrain=" + (drivetrain != null));
+                            entry.LastAxisLogTime = now;
+                        }
+                    }
+                    entry.InputCacheValid = false;
+                    continue;
+                }
+
+                float throttleInput = cInput.GetAxisRaw(axis.throttleAxis);
+                float brakeInput = cInput.GetAxisRaw(axis.brakeAxis);
+                float steerInput = cInput.GetAxisRaw(axis.steerAxis);
+                float handbrakeInput = cInput.GetAxisRaw(axis.handbrakeAxis);
+                float clutchInput = cInput.GetAxisRaw(axis.clutchAxis);
+                if (axis.normalizeThrottleInput)
+                {
+                    throttleInput = (throttleInput + 1f) / 2f;
+                }
+                if (axis.exponentialThrottleInput)
+                {
+                    throttleInput *= throttleInput;
+                }
+                if (axis.normalizeBrakesInput)
+                {
+                    brakeInput = (brakeInput + 1f) / 2f;
+                }
+                if (axis.exponentialBrakesInput)
+                {
+                    brakeInput *= brakeInput;
+                }
+                if (axis.normalizeClutchInput)
+                {
+                    clutchInput = (clutchInput + 1f) / 2f;
+                }
+                if (axis.exponentialClutchInput)
+                {
+                    clutchInput *= clutchInput;
+                }
+
+                entry.CachedThrottle = throttleInput;
+                entry.CachedBrake = brakeInput;
+                entry.CachedSteer = steerInput;
+                entry.CachedHandbrake = handbrakeInput;
+                entry.CachedClutch = clutchInput;
+                entry.LastInputSampleTime = now;
+                entry.InputCacheValid = true;
+
+                if (cInput.GetKeyDown(axis.startEngineButton))
+                {
+                    entry.PendingStartEngine = true;
+                }
+                if (cInput.GetKeyDown(axis.shiftUpButton))
+                {
+                    entry.PendingGearDelta++;
+                }
+                if (cInput.GetKeyDown(axis.shiftDownButton))
+                {
+                    entry.PendingGearDelta--;
+                }
+
+                entry.PendingShifterGearValid = false;
+                if (drivetrain.shifter)
+                {
+                    if (cInput.GetButton("reverse"))
+                    {
+                        entry.PendingShifterGear = 0;
+                        entry.PendingShifterGearValid = true;
+                    }
+                    else if (cInput.GetButton("neutral"))
+                    {
+                        entry.PendingShifterGear = 1;
+                        entry.PendingShifterGearValid = true;
+                    }
+                    else if (cInput.GetButton("first"))
+                    {
+                        entry.PendingShifterGear = 2;
+                        entry.PendingShifterGearValid = true;
+                    }
+                    else if (cInput.GetButton("second"))
+                    {
+                        entry.PendingShifterGear = 3;
+                        entry.PendingShifterGearValid = true;
+                    }
+                    else if (cInput.GetButton("third"))
+                    {
+                        entry.PendingShifterGear = 4;
+                        entry.PendingShifterGearValid = true;
+                    }
+                    else if (cInput.GetButton("fourth"))
+                    {
+                        entry.PendingShifterGear = 5;
+                        entry.PendingShifterGearValid = true;
+                    }
+                    else if (cInput.GetButton("fifth"))
+                    {
+                        entry.PendingShifterGear = 6;
+                        entry.PendingShifterGearValid = true;
+                    }
+                    else if (cInput.GetButton("sixth"))
+                    {
+                        entry.PendingShifterGear = 7;
+                        entry.PendingShifterGearValid = true;
+                    }
+                }
+
+                if (_settings != null && _settings.VerboseLogging.Value && now - entry.LastInputLogTime >= 1f)
+                {
+                    DebugLog.Verbose("VehicleSync: input cache vehicle=" + entry.DebugPath +
+                        " thr=" + throttleInput.ToString("F2") +
+                        " brk=" + brakeInput.ToString("F2") +
+                        " steer=" + steerInput.ToString("F2") +
+                        " clutch=" + clutchInput.ToString("F2") +
+                        " hb=" + handbrakeInput.ToString("F2") +
+                        " start=" + entry.PendingStartEngine +
+                        " gearDelta=" + entry.PendingGearDelta +
+                        " shifter=" + (entry.PendingShifterGearValid ? entry.PendingShifterGear.ToString() : "none"));
+                    entry.LastInputLogTime = now;
+                }
+            }
         }
 
         public void FixedUpdate(float now, float deltaTime, OwnerKind localOwner, bool includeUnowned)
@@ -166,7 +350,15 @@ namespace MyWinterCarMpMod.Sync
 
                 Vector3 pos = syncTransform.position;
                 Quaternion rot = syncTransform.rotation;
-                if (Vector3.Distance(entry.LastSentPosition, pos) < posThreshold &&
+
+                if (entry.LocalDriverFromFsm || entry.LocalPassengerFromFsm)
+                {
+                    entry.ForceStateSendUntilTime = Mathf.Max(entry.ForceStateSendUntilTime, now + ForceStateSendSeconds);
+                }
+
+                bool forceSend = entry.ForceStateSendUntilTime > 0f && now <= entry.ForceStateSendUntilTime;
+                if (!forceSend &&
+                    Vector3.Distance(entry.LastSentPosition, pos) < posThreshold &&
                     Quaternion.Angle(entry.LastSentRotation, rot) < rotThreshold)
                 {
                     continue;
@@ -253,22 +445,55 @@ namespace MyWinterCarMpMod.Sync
 
                 bool wants = IsLocalDriver(entry, localPos, hasLocal);
                 entry.LocalWantsControl = wants;
+                UpdateSorbetShifterOverride(entry, now, wants);
                 if (!wants)
                 {
                     continue;
                 }
 
-                float throttle;
-                float brake;
-                float steer;
-                float handbrake;
-                float clutch;
-                bool startEngine;
-                int targetGear;
-                if (!TryGetAxisInputs(entry, out throttle, out brake, out steer, out handbrake, out clutch, out startEngine, out targetGear))
+                float controllerThrottle;
+                float controllerBrake;
+                float controllerSteer;
+                float controllerHandbrake;
+                float controllerClutch;
+                bool controllerStart;
+                int controllerGear;
+                bool hasController = TryGetControllerInputs(entry, out controllerThrottle, out controllerBrake, out controllerSteer, out controllerHandbrake, out controllerClutch, out controllerStart, out controllerGear);
+
+                float cachedThrottle;
+                float cachedBrake;
+                float cachedSteer;
+                float cachedHandbrake;
+                float cachedClutch;
+                bool cachedStart;
+                int cachedGear;
+                bool hasCached = TryGetCachedInputs(entry, now, out cachedThrottle, out cachedBrake, out cachedSteer, out cachedHandbrake, out cachedClutch, out cachedStart, out cachedGear);
+
+                float axisThrottle = 0f;
+                float axisBrake = 0f;
+                float axisSteer = 0f;
+                float axisHandbrake = 0f;
+                float axisClutch = 0f;
+                bool axisStart = false;
+                int axisGear = 0;
+                bool hasAxis = false;
+                if (!hasCached)
+                {
+                    hasAxis = TryGetAxisInputs(entry, out axisThrottle, out axisBrake, out axisSteer, out axisHandbrake, out axisClutch, out axisStart, out axisGear);
+                }
+
+                if (!hasController && !hasCached && !hasAxis)
                 {
                     continue;
                 }
+
+                float throttle = hasController ? controllerThrottle : (hasCached ? cachedThrottle : axisThrottle);
+                float brake = hasController ? controllerBrake : (hasCached ? cachedBrake : axisBrake);
+                float steer = hasController ? controllerSteer : (hasCached ? cachedSteer : axisSteer);
+                float handbrake = hasController ? controllerHandbrake : (hasCached ? cachedHandbrake : axisHandbrake);
+                float clutch = hasController ? controllerClutch : (hasCached ? cachedClutch : axisClutch);
+                bool startEngine = hasCached ? cachedStart : (hasAxis ? axisStart : controllerStart);
+                int targetGear = hasCached ? cachedGear : (hasAxis ? axisGear : controllerGear);
 
                 VehicleControlData control = new VehicleControlData
                 {
@@ -362,6 +587,17 @@ namespace MyWinterCarMpMod.Sync
 
             bool isLocal = IsLocalAuthority(entry, localOwner, includeUnowned);
             ApplyLocalControl(entry, localOwner);
+            bool isSorbet = IsSorbetVehicle(entry);
+            bool remoteDriverActive = isSorbet && IsRemoteDriverActive(entry, now);
+            bool localPassenger = isSorbet && (entry.LocalPassengerFromFsm || IsLocalInPassengerSeat(entry));
+            if (localOwner == OwnerKind.Client && isSorbet && entry.LocalWantsControl)
+            {
+                if (!remoteDriverActive && !localPassenger &&
+                    entry.InputCacheValid && now - entry.LastInputSampleTime < 0.25f)
+                {
+                    return;
+                }
+            }
             if (isLocal)
             {
                 return;
@@ -431,7 +667,14 @@ namespace MyWinterCarMpMod.Sync
             _remoteSeatVehicleId = state.VehicleId;
             _remoteSeatIsDriver = state.SeatRole == 0;
             _remoteSeatInSeat = state.InSeat != 0;
-            _remoteSeatLastTime = Time.realtimeSinceStartup;
+            float now = Time.realtimeSinceStartup;
+            _remoteSeatLastTime = now;
+
+            VehicleEntry entry;
+            if (_vehicleLookup.TryGetValue(state.VehicleId, out entry) && entry != null)
+            {
+                entry.ForceStateSendUntilTime = Mathf.Max(entry.ForceStateSendUntilTime, now + ForceStateSendSeconds);
+            }
 
             if (_settings != null && _settings.VerboseLogging.Value)
             {
@@ -494,9 +737,25 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
+            Vector3 localPos;
+            bool hasLocal = TryGetLocalPosition(out localPos);
+            bool localDriverActive = IsLocalDriver(entry, localPos, hasLocal);
+            if (localDriverActive)
+            {
+                if (entry.RemoteControlActive)
+                {
+                    entry.RemoteControlActive = false;
+                    ApplyLocalControl(entry, localOwner);
+                }
+                return;
+            }
+
+            // Sorbet: accept control packets as implicit driver activity even if seat FSM lags.
+
             entry.LastControlSequence = control.Sequence;
             entry.LastControlReceiveTime = now;
             entry.RemoteControlActive = true;
+            entry.ForceStateSendUntilTime = Mathf.Max(entry.ForceStateSendUntilTime, now + ForceStateSendSeconds);
 
             EnsureVehicleComponents(entry);
             MPCarController controller = EnsureRemoteController(entry);
@@ -577,11 +836,59 @@ namespace MyWinterCarMpMod.Sync
                         " force=" + (entry.ForceOwnershipUntilTime > now) +
                         " hasLocal=" + hasLocal);
                 }
-                if (wants != entry.LocalWantsControl && _settings != null && _settings.VerboseLogging.Value)
+                bool previousWants = entry.LocalWantsControl;
+                if (wants != previousWants && _settings != null && _settings.VerboseLogging.Value)
                 {
                     DebugLog.Verbose("VehicleSync: local driver=" + wants + " vehicle=" + entry.DebugPath);
                 }
                 entry.LocalWantsControl = wants;
+
+                bool isSorbet = IsSorbetVehicle(entry);
+                bool wantsChanged = wants != previousWants;
+                if (isSorbet)
+                {
+                    if (wantsChanged)
+                    {
+                        entry.LastOwnershipRequestTime = 0f;
+                    }
+                    if (wants && entry.Owner != OwnerKind.Client)
+                    {
+                        if (wantsChanged)
+                        {
+                            buffer.Add(new OwnershipRequestData
+                            {
+                                Kind = SyncObjectKind.Vehicle,
+                                ObjectId = entry.Id,
+                                Action = OwnershipAction.Request
+                            });
+                            if (_settings != null && _settings.VerboseLogging.Value && now - entry.LastOwnershipLogTime >= 1f)
+                            {
+                                DebugLog.Verbose("VehicleSync: ownership request=Request vehicle=" + entry.DebugPath);
+                                entry.LastOwnershipLogTime = now;
+                            }
+                            entry.LastOwnershipRequestTime = now;
+                        }
+                    }
+                    else if (!wants && entry.Owner == OwnerKind.Client)
+                    {
+                        if (wantsChanged)
+                        {
+                            buffer.Add(new OwnershipRequestData
+                            {
+                                Kind = SyncObjectKind.Vehicle,
+                                ObjectId = entry.Id,
+                                Action = OwnershipAction.Release
+                            });
+                            if (_settings != null && _settings.VerboseLogging.Value && now - entry.LastOwnershipLogTime >= 1f)
+                            {
+                                DebugLog.Verbose("VehicleSync: ownership request=Release vehicle=" + entry.DebugPath);
+                                entry.LastOwnershipLogTime = now;
+                            }
+                            entry.LastOwnershipRequestTime = now;
+                        }
+                    }
+                    continue;
+                }
 
                 if (wants && entry.Owner != OwnerKind.Client)
                 {
@@ -654,6 +961,40 @@ namespace MyWinterCarMpMod.Sync
                 bool wants = IsLocalDriver(entry, localPos, hasLocal);
                 entry.LocalWantsControl = wants;
 
+                bool isSorbet = IsSorbetVehicle(entry);
+                if (isSorbet)
+                {
+                    if (wants)
+                    {
+                        if (entry.Owner != OwnerKind.Host)
+                        {
+                            entry.Owner = OwnerKind.Host;
+                            ApplyLocalControl(entry, localOwner);
+                            buffer.Add(new OwnershipUpdateData
+                            {
+                                Kind = SyncObjectKind.Vehicle,
+                                ObjectId = entry.Id,
+                                Owner = OwnerKind.Host
+                            });
+                        }
+                    }
+                    else
+                    {
+                        if (entry.Owner != OwnerKind.Client && entry.Owner != OwnerKind.Host)
+                        {
+                            entry.Owner = OwnerKind.Host;
+                            ApplyLocalControl(entry, localOwner);
+                            buffer.Add(new OwnershipUpdateData
+                            {
+                                Kind = SyncObjectKind.Vehicle,
+                                ObjectId = entry.Id,
+                                Owner = OwnerKind.Host
+                            });
+                        }
+                    }
+                    continue;
+                }
+
                 if (wants && entry.Owner != OwnerKind.Host)
                 {
                     entry.Owner = OwnerKind.Host;
@@ -698,6 +1039,26 @@ namespace MyWinterCarMpMod.Sync
 
             if (request.Action == OwnershipAction.Request)
             {
+                Vector3 localPos;
+                bool hasLocal = TryGetLocalPosition(out localPos);
+                bool localDriverActive = IsLocalDriver(entry, localPos, hasLocal);
+                bool remoteDriverActive = IsRemoteDriverActive(entry, Time.realtimeSinceStartup);
+                if (localDriverActive)
+                {
+                    if (_settings != null && _settings.VerboseLogging.Value)
+                    {
+                        DebugLog.Verbose("VehicleSync: ownership denied (host driving) vehicle=" + entry.DebugPath);
+                    }
+                    return false;
+                }
+                if (!remoteDriverActive)
+                {
+                    if (_settings != null && _settings.VerboseLogging.Value)
+                    {
+                        DebugLog.Verbose("VehicleSync: ownership denied (remote not driver) vehicle=" + entry.DebugPath);
+                    }
+                    return false;
+                }
                 if (entry.Owner == OwnerKind.Host)
                 {
                     return false;
@@ -1004,6 +1365,7 @@ namespace MyWinterCarMpMod.Sync
             FindSeatTransforms(root, out driverSeat, out passengerSeat);
             entry.SeatTransform = driverSeat;
             entry.PassengerSeatTransform = passengerSeat;
+            entry.PassengerSeatAnchor = null;
             entry.SeatFsms.Clear();
             entry.DriverSeatFsms.Clear();
             entry.PassengerSeatFsms.Clear();
@@ -1017,6 +1379,13 @@ namespace MyWinterCarMpMod.Sync
             entry.LocalPassengerFromFsm = false;
             entry.LastSentDriverInSeat = false;
             entry.LastSentPassengerInSeat = false;
+            entry.ForceStateSendUntilTime = 0f;
+            entry.HasOriginalShifter = false;
+            entry.ShifterOverridden = false;
+            entry.LastHShifterInputTime = 0f;
+            entry.SteeringWheelBaseKnown = false;
+            entry.SteeringWheelBaseAngle = 0f;
+            entry.SteeringWheelRotateY = false;
 
             Transform syncTransform = GetSyncTransform(entry);
             if (syncTransform != null)
@@ -1326,6 +1695,68 @@ namespace MyWinterCarMpMod.Sync
             return IsLocalAuthority(entry, localOwner, includeUnowned);
         }
 
+        public bool IsLocalDriverForTransform(Transform transform, float now)
+        {
+            if (transform == null || !Enabled)
+            {
+                return false;
+            }
+
+            VehicleEntry entry = FindEntryByTransform(transform);
+            if (entry == null)
+            {
+                return false;
+            }
+
+            EnsureVehicleComponents(entry);
+            RefreshSeatFromFsm(entry, now);
+
+            Vector3 localPos;
+            bool hasLocal = TryGetLocalPosition(out localPos);
+            return IsLocalDriver(entry, localPos, hasLocal);
+        }
+
+        public bool IsRemoteDriverForTransform(Transform transform)
+        {
+            if (transform == null || !Enabled)
+            {
+                return false;
+            }
+
+            VehicleEntry entry = FindEntryByTransform(transform);
+            if (entry == null)
+            {
+                return false;
+            }
+
+            if (Time.realtimeSinceStartup - _remoteSeatLastTime > RemoteSeatTimeoutSeconds)
+            {
+                return false;
+            }
+
+            return _remoteSeatInSeat && _remoteSeatIsDriver && _remoteSeatVehicleId == entry.Id;
+        }
+
+        private bool IsRemoteDriverActive(VehicleEntry entry, float now)
+        {
+            if (entry == null)
+            {
+                return false;
+            }
+
+            if (IsSorbetVehicle(entry))
+            {
+                return _remoteSeatInSeat && _remoteSeatIsDriver && _remoteSeatVehicleId == entry.Id;
+            }
+
+            if (now - _remoteSeatLastTime > RemoteSeatTimeoutSeconds)
+            {
+                return false;
+            }
+
+            return _remoteSeatInSeat && _remoteSeatIsDriver && _remoteSeatVehicleId == entry.Id;
+        }
+
         public bool TryGetLocalSorbetVehicleId(float now, out uint vehicleId)
         {
             vehicleId = 0;
@@ -1432,8 +1863,13 @@ namespace MyWinterCarMpMod.Sync
             bool isSorbet = IsSorbetVehicle(entry);
             bool allowUnowned = localOwner == OwnerKind.Host;
             bool isLocal = entry.Owner == localOwner || (allowUnowned && entry.Owner == OwnerKind.None);
+            bool clientWantsControl = isSorbet && localOwner == OwnerKind.Client && (entry.LocalWantsControl || entry.LocalDriverFromFsm);
 
-            if (isSorbet && localOwner == OwnerKind.Host && entry.RemoteControlActive)
+            if (clientWantsControl && !isLocal)
+            {
+                SetControlMode(entry, VehicleControlMode.Local);
+            }
+            else if (isSorbet && localOwner == OwnerKind.Host && entry.RemoteControlActive)
             {
                 SetControlMode(entry, VehicleControlMode.Remote);
             }
@@ -1442,7 +1878,7 @@ namespace MyWinterCarMpMod.Sync
                 SetControlMode(entry, isLocal ? VehicleControlMode.Local : VehicleControlMode.Passive);
             }
 
-            bool shouldKinematic = localOwner == OwnerKind.Client && !isLocal;
+            bool shouldKinematic = localOwner == OwnerKind.Client && !isLocal && !clientWantsControl;
             if (entry.Body != null)
             {
                 if (entry.Body.isKinematic != shouldKinematic)
@@ -1495,9 +1931,18 @@ namespace MyWinterCarMpMod.Sync
             {
                 entry.AxisController = root.GetComponent<AxisCarController>() ?? GetComponentInChildrenIncludingInactive<AxisCarController>(root);
             }
+            if (entry.MouseController == null)
+            {
+                entry.MouseController = root.GetComponent<MouseCarController>() ?? GetComponentInChildrenIncludingInactive<MouseCarController>(root);
+            }
             if (entry.Drivetrain == null)
             {
                 entry.Drivetrain = root.GetComponent<Drivetrain>() ?? GetComponentInChildrenIncludingInactive<Drivetrain>(root);
+            }
+            if (entry.Drivetrain != null && !entry.HasOriginalShifter)
+            {
+                entry.OriginalShifter = entry.Drivetrain.shifter;
+                entry.HasOriginalShifter = true;
             }
             if (entry.BrakeLights == null)
             {
@@ -1566,7 +2011,9 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
-            float lerp = Mathf.Clamp01(deltaTime * RemoteLerpSpeed);
+            bool localInSeat = entry.LocalDriverFromFsm || entry.LocalPassengerFromFsm;
+            float lerpSpeed = localInSeat ? RemoteLerpSpeed * RemoteSeatLerpMultiplier : RemoteLerpSpeed;
+            float lerp = Mathf.Clamp01(deltaTime * lerpSpeed);
             float age = Mathf.Clamp(now - entry.RemoteTargetTime, 0f, RemoteExtrapolationMax);
             Vector3 targetPos = entry.RemoteTargetPosition + entry.RemoteTargetVelocity * age;
             Quaternion targetRot = entry.RemoteTargetRotation;
@@ -1593,6 +2040,10 @@ namespace MyWinterCarMpMod.Sync
                 {
                     Quaternion newRot = Quaternion.Slerp(entry.Body.rotation, targetRot, lerp);
                     float smoothTime = GetRemoteSmoothTime();
+                    if (localInSeat)
+                    {
+                        smoothTime = Mathf.Max(RemoteSmoothTimeMin, smoothTime * 0.5f);
+                    }
                     Vector3 newPos = Vector3.SmoothDamp(entry.Body.position, targetPos, ref entry.RemoteSmoothVelocity, smoothTime, Mathf.Infinity, deltaTime);
                     entry.Body.MovePosition(newPos);
                     entry.Body.MoveRotation(newRot);
@@ -1689,6 +2140,54 @@ namespace MyWinterCarMpMod.Sync
                     }
                 }
             }
+
+            UpdateSteeringWheelVisual(entry);
+        }
+
+        private void UpdateSteeringWheelVisual(VehicleEntry entry)
+        {
+            if (entry == null)
+            {
+                return;
+            }
+
+            SteeringWheel steeringWheel = entry.SteeringWheel;
+            if (steeringWheel == null)
+            {
+                return;
+            }
+
+            Transform wheelTransform = steeringWheel.transform;
+            if (wheelTransform == null)
+            {
+                return;
+            }
+
+            if (!entry.SteeringWheelBaseKnown)
+            {
+                entry.SteeringWheelRotateY = steeringWheel.rotateAroundY;
+                entry.SteeringWheelBaseAngle = entry.SteeringWheelRotateY
+                    ? wheelTransform.localEulerAngles.y
+                    : wheelTransform.localEulerAngles.z;
+                entry.SteeringWheelBaseKnown = true;
+            }
+
+            // Avoid SteeringWheel.Update overriding the visual when we drive it from remote data.
+            steeringWheel.carController = null;
+
+            float steer = entry.RemoteSteer;
+            int sign = steeringWheel.invertRotation ? -1 : 1;
+            Vector3 euler = wheelTransform.localEulerAngles;
+            float targetAngle = entry.SteeringWheelBaseAngle + sign * steer * steeringWheel.maxSteeringAngle;
+            if (entry.SteeringWheelRotateY)
+            {
+                euler.y = targetAngle;
+            }
+            else
+            {
+                euler.z = targetAngle;
+            }
+            wheelTransform.localEulerAngles = euler;
         }
 
         private static T GetComponentInChildrenIncludingInactive<T>(Transform root) where T : Component
@@ -1705,6 +2204,126 @@ namespace MyWinterCarMpMod.Sync
             }
 
             return found[0];
+        }
+
+        private static CarController ResolveActiveController(VehicleEntry entry)
+        {
+            if (entry == null)
+            {
+                return null;
+            }
+
+            if (entry.CarDynamics != null && entry.CarDynamics.carController != null)
+            {
+                return entry.CarDynamics.carController;
+            }
+
+            if (entry.AxisController != null)
+            {
+                return entry.AxisController;
+            }
+
+            if (entry.MouseController != null)
+            {
+                return entry.MouseController;
+            }
+
+            if (entry.RemoteController != null)
+            {
+                return entry.RemoteController;
+            }
+
+            return null;
+        }
+
+        private static CarDynamics.Controller ResolveLocalController(VehicleEntry entry)
+        {
+            if (entry == null)
+            {
+                return CarDynamics.Controller.axis;
+            }
+
+            CarDynamics.Controller controller = entry.OriginalController;
+            if (controller == CarDynamics.Controller.external)
+            {
+                bool preferAxis = IsSorbetVehicle(entry);
+                if (preferAxis && entry.AxisController != null)
+                {
+                    controller = CarDynamics.Controller.axis;
+                }
+                else if (entry.MouseController != null)
+                {
+                    controller = CarDynamics.Controller.mouse;
+                }
+                else if (entry.AxisController != null)
+                {
+                    controller = CarDynamics.Controller.axis;
+                }
+                else
+                {
+                    controller = CarDynamics.Controller.axis;
+                }
+                entry.OriginalController = controller;
+            }
+
+            return controller;
+        }
+
+        private void UpdateSorbetShifterOverride(VehicleEntry entry, float now, bool localDriver)
+        {
+            if (entry == null || entry.Drivetrain == null)
+            {
+                return;
+            }
+            if (!IsSorbetVehicle(entry))
+            {
+                return;
+            }
+
+            if (!entry.HasOriginalShifter)
+            {
+                entry.OriginalShifter = entry.Drivetrain.shifter;
+                entry.HasOriginalShifter = true;
+            }
+
+            if (!localDriver)
+            {
+                if (entry.ShifterOverridden)
+                {
+                    entry.Drivetrain.shifter = entry.OriginalShifter;
+                    entry.ShifterOverridden = false;
+                }
+                return;
+            }
+
+            bool gearButton =
+                cInput.GetButton("reverse") ||
+                cInput.GetButton("neutral") ||
+                cInput.GetButton("first") ||
+                cInput.GetButton("second") ||
+                cInput.GetButton("third") ||
+                cInput.GetButton("fourth") ||
+                cInput.GetButton("fifth") ||
+                cInput.GetButton("sixth");
+
+            if (gearButton)
+            {
+                entry.LastHShifterInputTime = now;
+            }
+
+            bool allowHShifter = entry.OriginalShifter && (gearButton || now - entry.LastHShifterInputTime <= 0.25f);
+            bool desired = allowHShifter ? entry.OriginalShifter : false;
+            if (entry.Drivetrain.shifter != desired)
+            {
+                entry.Drivetrain.shifter = desired;
+                entry.ShifterOverridden = desired != entry.OriginalShifter;
+                if (_settings != null && _settings.VerboseLogging.Value)
+                {
+                    DebugLog.Verbose("VehicleSync: sorbet shifter override vehicle=" + entry.DebugPath +
+                        " desired=" + desired +
+                        " original=" + entry.OriginalShifter);
+                }
+            }
         }
 
         private void SetControlMode(VehicleEntry entry, VehicleControlMode mode)
@@ -1726,17 +2345,14 @@ namespace MyWinterCarMpMod.Sync
                 case VehicleControlMode.Local:
                     if (entry.CarDynamics != null)
                     {
-                        entry.CarDynamics.SetController(entry.OriginalController.ToString());
-                    }
-                    if (entry.AxisController != null)
-                    {
-                        entry.AxisController.enabled = true;
+                        CarDynamics.Controller controller = ResolveLocalController(entry);
+                        entry.CarDynamics.SetController(controller.ToString());
                     }
                     if (entry.RemoteController != null)
                     {
                         entry.RemoteController.enabled = false;
                     }
-                    SetCarControllerRefs(entry, entry.AxisController);
+                    SetCarControllerRefs(entry, ResolveActiveController(entry));
                     break;
                 case VehicleControlMode.Remote:
                     if (entry.CarDynamics != null)
@@ -1768,7 +2384,7 @@ namespace MyWinterCarMpMod.Sync
                     {
                         entry.RemoteController.enabled = false;
                     }
-                    SetCarControllerRefs(entry, entry.AxisController);
+                    SetCarControllerRefs(entry, ResolveActiveController(entry) ?? entry.AxisController);
                     break;
             }
 
@@ -1867,8 +2483,7 @@ namespace MyWinterCarMpMod.Sync
                     int gear = entry.Drivetrain != null ? entry.Drivetrain.gear : 0;
                     entry.RemoteController.SetInput(0f, 0f, 0f, 0f, 0f, false, gear, entry.LastControlSequence, now);
                 }
-
-                SetControlMode(entry, VehicleControlMode.Passive);
+                ApplyLocalControl(entry, localOwner);
             }
         }
 
@@ -1885,6 +2500,104 @@ namespace MyWinterCarMpMod.Sync
                 name = entry.Key;
             }
             return !string.IsNullOrEmpty(name) && name.IndexOf("SORBET", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private bool TryGetCachedInputs(VehicleEntry entry, float now, out float throttleInput, out float brakeInput, out float steerInput, out float handbrakeInput, out float clutchInput, out bool startEngineInput, out int targetGear)
+        {
+            throttleInput = 0f;
+            brakeInput = 0f;
+            steerInput = 0f;
+            handbrakeInput = 0f;
+            clutchInput = 0f;
+            startEngineInput = false;
+            targetGear = 0;
+
+            if (entry == null || !entry.InputCacheValid)
+            {
+                return false;
+            }
+
+            if (now - entry.LastInputSampleTime > InputCacheMaxAgeSeconds)
+            {
+                entry.InputCacheValid = false;
+                entry.PendingGearDelta = 0;
+                entry.PendingStartEngine = false;
+                entry.PendingShifterGearValid = false;
+                return false;
+            }
+
+            throttleInput = entry.CachedThrottle;
+            brakeInput = entry.CachedBrake;
+            steerInput = entry.CachedSteer;
+            handbrakeInput = entry.CachedHandbrake;
+            clutchInput = entry.CachedClutch;
+            startEngineInput = entry.PendingStartEngine;
+
+            int currentGear = entry.Drivetrain != null ? entry.Drivetrain.gear : 0;
+            if (entry.PendingShifterGearValid)
+            {
+                targetGear = entry.PendingShifterGear;
+            }
+            else if (entry.PendingGearDelta != 0)
+            {
+                int nextGear = currentGear + entry.PendingGearDelta;
+                if (nextGear < 0)
+                {
+                    nextGear = 0;
+                }
+                else if (nextGear > 7)
+                {
+                    nextGear = 7;
+                }
+                targetGear = nextGear;
+            }
+            else
+            {
+                targetGear = currentGear;
+            }
+
+            entry.PendingStartEngine = false;
+            entry.PendingGearDelta = 0;
+            entry.PendingShifterGearValid = false;
+            return true;
+        }
+
+        private bool TryGetControllerInputs(VehicleEntry entry, out float throttleInput, out float brakeInput, out float steerInput, out float handbrakeInput, out float clutchInput, out bool startEngineInput, out int targetGear)
+        {
+            throttleInput = 0f;
+            brakeInput = 0f;
+            steerInput = 0f;
+            handbrakeInput = 0f;
+            clutchInput = 0f;
+            startEngineInput = false;
+            targetGear = 0;
+
+            if (entry == null)
+            {
+                return false;
+            }
+
+            EnsureVehicleComponents(entry);
+
+            CarController controller = entry.CarDynamics != null ? entry.CarDynamics.carController : null;
+            if (controller == null || !controller.enabled || controller is MPCarController)
+            {
+                return false;
+            }
+
+            throttleInput = controller.throttleInput;
+            brakeInput = controller.brakeInput;
+            steerInput = controller.steerInput;
+            handbrakeInput = controller.handbrakeInput;
+            clutchInput = controller.clutchInput;
+            startEngineInput = controller.startEngineInput;
+
+            if (entry.Drivetrain != null)
+            {
+                targetGear = entry.Drivetrain.gear;
+            }
+
+            return true;
         }
 
         private bool TryGetAxisInputs(VehicleEntry entry, out float throttleInput, out float brakeInput, out float steerInput, out float handbrakeInput, out float clutchInput, out bool startEngineInput, out int targetGear)
@@ -1953,51 +2666,63 @@ namespace MyWinterCarMpMod.Sync
             }
             startEngineInput = cInput.GetKeyDown(axis.startEngineButton);
             targetGear = drivetrain.gear;
+            bool sequentialShifted = false;
             if (cInput.GetKeyDown(axis.shiftUpButton))
             {
                 targetGear++;
+                sequentialShifted = true;
             }
             if (cInput.GetKeyDown(axis.shiftDownButton))
             {
                 targetGear--;
+                sequentialShifted = true;
             }
             if (drivetrain.shifter)
             {
+                bool gearButtonPressed = false;
                 if (cInput.GetButton("reverse"))
                 {
                     targetGear = 0;
+                    gearButtonPressed = true;
                 }
                 else if (cInput.GetButton("neutral"))
                 {
                     targetGear = 1;
+                    gearButtonPressed = true;
                 }
                 else if (cInput.GetButton("first"))
                 {
                     targetGear = 2;
+                    gearButtonPressed = true;
                 }
                 else if (cInput.GetButton("second"))
                 {
                     targetGear = 3;
+                    gearButtonPressed = true;
                 }
                 else if (cInput.GetButton("third"))
                 {
                     targetGear = 4;
+                    gearButtonPressed = true;
                 }
                 else if (cInput.GetButton("fourth"))
                 {
                     targetGear = 5;
+                    gearButtonPressed = true;
                 }
                 else if (cInput.GetButton("fifth"))
                 {
                     targetGear = 6;
+                    gearButtonPressed = true;
                 }
                 else if (cInput.GetButton("sixth"))
                 {
                     targetGear = 7;
+                    gearButtonPressed = true;
                 }
-                else
+                if (!gearButtonPressed && !sequentialShifted)
                 {
-                    targetGear = 1;
+                    targetGear = drivetrain.gear;
                 }
             }
 
@@ -2026,63 +2751,105 @@ namespace MyWinterCarMpMod.Sync
             }
 
             float now = Time.realtimeSinceStartup;
-            bool remoteDriverActive = _remoteSeatInSeat && _remoteSeatIsDriver && _remoteSeatVehicleId == entry.Id;
+            bool remoteDriverActive = IsRemoteDriverActive(entry, now);
             bool force = entry.ForceOwnershipUntilTime > 0f && now <= entry.ForceOwnershipUntilTime;
             bool fromFsm = entry.LocalDriverFromFsm;
-            bool isPassenger = entry.LocalPassengerFromFsm;
-
-            if (remoteDriverActive && !fromFsm)
+            bool fsmInSeat;
+            string fsmStateName;
+            string fsmName;
+            bool fsmKnown = TryGetDriverSeatState(entry, out fsmInSeat, out fsmStateName, out fsmName);
+            if (fsmKnown)
             {
-                force = false;
+                fromFsm = fsmInSeat;
+                if (!fsmInSeat)
+                {
+                    force = false;
+                    entry.ForceOwnershipUntilTime = 0f;
+                }
+            }
+            bool isPassenger = entry.LocalPassengerFromFsm;
+            bool isSorbet = IsSorbetVehicle(entry);
+            if (!isPassenger && IsLocalInPassengerSeat(entry))
+            {
+                isPassenger = true;
+            }
+            if (isPassenger)
+            {
+                fromFsm = false;
             }
 
             bool childMatch = false;
-            Transform body;
-            Transform view;
-            if (_playerLocator.TryGetLocalTransforms(out body, out view))
-            {
-                childMatch = IsChildOf(body, root) || IsChildOf(view, root);
-            }
-
             bool cameraMatch = false;
-            CarCameras cameras = FindCarCameras();
-            if (cameras != null && cameras.driverView && cameras.mtarget != null)
-            {
-                Transform targetRoot = cameras.mtarget.root;
-                Transform entryRoot = root.root;
-                if (targetRoot == entryRoot)
-                {
-                    cameraMatch = true;
-                }
-            }
-
             bool seatMatch = false;
             float seatDistance = -1f;
-            bool allowSeatMatch = !isPassenger;
-            if (allowSeatMatch && hasLocal && entry.SeatTransform != null)
+            bool fallbackMatch = false;
+            bool allowFallback = (!fsmKnown || (isSorbet && !fsmInSeat)) && !isPassenger;
+            if (remoteDriverActive && !fromFsm)
             {
-                seatDistance = Vector3.Distance(localPos, entry.SeatTransform.position);
-                seatMatch = seatDistance <= _settings.GetVehicleSeatDistance();
-                if (seatMatch)
+                allowFallback = false;
+            }
+            if (allowFallback)
+            {
+                Transform body;
+                Transform view;
+                if (_playerLocator.TryGetLocalTransforms(out body, out view))
                 {
-                    entry.ForceOwnershipUntilTime = Mathf.Max(entry.ForceOwnershipUntilTime, now + SeatOwnershipHoldSeconds);
+                    childMatch = IsChildOf(body, root) || IsChildOf(view, root);
+                }
+
+                CarCameras cameras = FindCarCameras();
+                if (cameras != null && cameras.driverView && cameras.mtarget != null)
+                {
+                    Transform targetRoot = cameras.mtarget.root;
+                    Transform entryRoot = root.root;
+                    if (targetRoot == entryRoot)
+                    {
+                        cameraMatch = true;
+                    }
+                }
+
+                if (hasLocal && entry.SeatTransform != null)
+                {
+                    seatDistance = Vector3.Distance(localPos, entry.SeatTransform.position);
+                    seatMatch = seatDistance <= _settings.GetVehicleSeatDistance();
+                    if (seatMatch)
+                    {
+                        entry.ForceOwnershipUntilTime = Mathf.Max(entry.ForceOwnershipUntilTime, now + SeatOwnershipHoldSeconds);
+                    }
+                }
+
+                fallbackMatch = seatMatch || cameraMatch;
+                if (!IsSorbetVehicle(entry))
+                {
+                    fallbackMatch = fallbackMatch || childMatch;
                 }
             }
 
-            if (isPassenger || (remoteDriverActive && !fromFsm))
+            bool localInDriverSeat = fromFsm || (allowFallback && fallbackMatch);
+            if (remoteDriverActive && !localInDriverSeat)
             {
+                force = false;
                 childMatch = false;
                 cameraMatch = false;
                 seatMatch = false;
+                fallbackMatch = false;
+                localInDriverSeat = false;
             }
 
-            bool result = force || fromFsm || childMatch || cameraMatch || seatMatch;
+            if (isPassenger)
+            {
+                force = false;
+                localInDriverSeat = false;
+            }
+
+            bool result = force || localInDriverSeat;
             if (_settings != null && _settings.VerboseLogging.Value && now - entry.LastDriverLogTime >= 1f)
             {
                 DebugLog.Verbose("VehicleSync: local driver eval vehicle=" + entry.DebugPath +
                     " result=" + result +
                     " force=" + force +
                     " fsm=" + fromFsm +
+                    " fsmKnown=" + fsmKnown +
                     " remoteDriver=" + remoteDriverActive +
                     " passenger=" + isPassenger +
                     " child=" + childMatch +
@@ -2107,6 +2874,54 @@ namespace MyWinterCarMpMod.Sync
                 return true;
             }
             return child.IsChildOf(parent);
+        }
+
+        private bool IsLocalInPassengerSeat(VehicleEntry entry)
+        {
+            if (entry == null)
+            {
+                return false;
+            }
+
+            Transform body;
+            Transform view;
+            if (!_playerLocator.TryGetLocalTransforms(out body, out view))
+            {
+                return false;
+            }
+
+            if (HasAncestorNamed(body, "MWC_MP_PassengerSeat") || HasAncestorNamed(view, "MWC_MP_PassengerSeat"))
+            {
+                return true;
+            }
+
+            Transform anchor = entry.PassengerSeatAnchor ?? entry.PassengerSeatTransform;
+            if (anchor == null)
+            {
+                return false;
+            }
+
+            return IsChildOf(body, anchor) || IsChildOf(view, anchor);
+        }
+
+        private static bool HasAncestorNamed(Transform transform, string target)
+        {
+            if (transform == null || string.IsNullOrEmpty(target))
+            {
+                return false;
+            }
+
+            Transform current = transform;
+            while (current != null)
+            {
+                if (string.Equals(current.name, target, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+                current = current.parent;
+            }
+
+            return false;
         }
 
         private CarCameras FindCarCameras()
@@ -2485,16 +3300,16 @@ namespace MyWinterCarMpMod.Sync
                 seatTrigger = anchor.gameObject.AddComponent<PassengerSeatTrigger>();
                 seatTrigger.Initialize(this, entry.Id);
 
-                if (entry.PassengerSeatTransform == null || entry.PassengerSeatTransform == entry.SeatTransform)
-                {
-                    entry.PassengerSeatTransform = anchor;
-                }
+                entry.PassengerSeatTransform = anchor;
+                entry.PassengerSeatAnchor = anchor;
 
                 DebugLog.Warn("VehicleSync: passenger seat trigger created vehicle=" + entry.DebugPath);
             }
             else
             {
                 seatTrigger.Initialize(this, entry.Id);
+                entry.PassengerSeatTransform = existing;
+                entry.PassengerSeatAnchor = existing;
             }
         }
 
@@ -2517,6 +3332,7 @@ namespace MyWinterCarMpMod.Sync
                 {
                     float now = Time.realtimeSinceStartup;
                     entry.ForceOwnershipUntilTime = Mathf.Max(entry.ForceOwnershipUntilTime, now + SeatOwnershipHoldSeconds);
+                    entry.ForceStateSendUntilTime = Mathf.Max(entry.ForceStateSendUntilTime, now + ForceStateSendSeconds);
                     entry.LastOwnershipRequestTime = 0f;
                     entry.LocalPassengerFromFsm = false;
                 }
@@ -2543,6 +3359,7 @@ namespace MyWinterCarMpMod.Sync
                 if (inSeat)
                 {
                     entry.ForceOwnershipUntilTime = 0f;
+                    entry.ForceStateSendUntilTime = Mathf.Max(entry.ForceStateSendUntilTime, Time.realtimeSinceStartup + ForceStateSendSeconds);
                 }
 
                 QueueSeatEvent(entry, inSeat, false);
@@ -2844,6 +3661,7 @@ namespace MyWinterCarMpMod.Sync
                 if (inSeat)
                 {
                     entry.LocalDriverFromFsm = false;
+                    entry.ForceStateSendUntilTime = Mathf.Max(entry.ForceStateSendUntilTime, Time.realtimeSinceStartup + ForceStateSendSeconds);
                 }
                 QueueSeatEvent(entry, inSeat, false);
             }
@@ -2853,6 +3671,7 @@ namespace MyWinterCarMpMod.Sync
                 if (inSeat)
                 {
                     entry.LocalPassengerFromFsm = false;
+                    entry.ForceStateSendUntilTime = Mathf.Max(entry.ForceStateSendUntilTime, Time.realtimeSinceStartup + ForceStateSendSeconds);
                 }
                 QueueSeatEvent(entry, inSeat, true);
             }
@@ -2880,6 +3699,22 @@ namespace MyWinterCarMpMod.Sync
             }
             entry.LastSeatStatePollTime = now;
 
+            if (IsLocalInPassengerSeat(entry))
+            {
+                if (!entry.LocalPassengerFromFsm)
+                {
+                    entry.LocalPassengerFromFsm = true;
+                    entry.LocalDriverFromFsm = false;
+                    entry.ForceStateSendUntilTime = Mathf.Max(entry.ForceStateSendUntilTime, now + ForceStateSendSeconds);
+                    QueueSeatEvent(entry, true, false);
+                    if (_settings != null && _settings.VerboseLogging.Value)
+                    {
+                        DebugLog.Verbose("VehicleSync: seat local passenger vehicle=" + entry.DebugPath);
+                    }
+                }
+                return;
+            }
+
             bool inSeat;
             bool isPassenger;
             string stateName;
@@ -2900,6 +3735,7 @@ namespace MyWinterCarMpMod.Sync
                 {
                     entry.ForceOwnershipUntilTime = 0f;
                     entry.LocalDriverFromFsm = false;
+                    entry.ForceStateSendUntilTime = Mathf.Max(entry.ForceStateSendUntilTime, now + ForceStateSendSeconds);
                 }
                 QueueSeatEvent(entry, inSeat, false);
             }
@@ -2915,6 +3751,7 @@ namespace MyWinterCarMpMod.Sync
                     entry.ForceOwnershipUntilTime = Mathf.Max(entry.ForceOwnershipUntilTime, now + SeatOwnershipHoldSeconds);
                     entry.LastOwnershipRequestTime = 0f;
                     entry.LocalPassengerFromFsm = false;
+                    entry.ForceStateSendUntilTime = Mathf.Max(entry.ForceStateSendUntilTime, now + ForceStateSendSeconds);
                 }
                 else
                 {
@@ -3110,6 +3947,70 @@ namespace MyWinterCarMpMod.Sync
             return true;
         }
 
+        private bool TryGetDriverSeatState(VehicleEntry entry, out bool inSeat, out string stateName, out string fsmName)
+        {
+            inSeat = false;
+            stateName = null;
+            fsmName = null;
+
+            if (entry == null)
+            {
+                return false;
+            }
+
+            List<PlayMakerFSM> fsms = entry.DriverSeatFsms != null && entry.DriverSeatFsms.Count > 0
+                ? entry.DriverSeatFsms
+                : entry.SeatFsms;
+            if (fsms == null || fsms.Count == 0)
+            {
+                return false;
+            }
+
+            bool found = false;
+            for (int i = 0; i < fsms.Count; i++)
+            {
+                PlayMakerFSM fsm = fsms[i];
+                bool fsmInSeat;
+                bool fsmPassenger;
+                string fsmState;
+                string fsmLabel;
+                bool exitAsEnter = entry.PassengerExitAsEnterFsms != null &&
+                    fsm != null &&
+                    entry.PassengerExitAsEnterFsms.Contains(fsm.GetInstanceID());
+                if (!TryGetSeatStateFromFsm(fsm, exitAsEnter, out fsmInSeat, out fsmPassenger, out fsmState, out fsmLabel))
+                {
+                    continue;
+                }
+
+                found = true;
+                if (fsmPassenger)
+                {
+                    if (stateName == null)
+                    {
+                        stateName = fsmState;
+                        fsmName = fsmLabel;
+                    }
+                    continue;
+                }
+
+                if (fsmInSeat)
+                {
+                    inSeat = true;
+                    stateName = fsmState;
+                    fsmName = fsmLabel;
+                    return true;
+                }
+
+                if (stateName == null)
+                {
+                    stateName = fsmState;
+                    fsmName = fsmLabel;
+                }
+            }
+
+            return found;
+        }
+
         private enum VehicleControlMode
         {
             Unknown = 0,
@@ -3127,18 +4028,27 @@ namespace MyWinterCarMpMod.Sync
             public Rigidbody Body;
             public CarDynamics CarDynamics;
             public AxisCarController AxisController;
+            public MouseCarController MouseController;
             public MPCarController RemoteController;
             public Drivetrain Drivetrain;
             public BrakeLights BrakeLights;
             public DashBoard DashBoard;
             public SteeringWheel SteeringWheel;
+            public bool SteeringWheelBaseKnown;
+            public float SteeringWheelBaseAngle;
+            public bool SteeringWheelRotateY;
             public SoundController SoundController;
             public Axles Axles;
             public Wheel[] Wheels;
             public Transform SeatTransform;
             public Transform PassengerSeatTransform;
+            public Transform PassengerSeatAnchor;
             public OwnerKind Owner;
             public CarDynamics.Controller OriginalController;
+            public bool HasOriginalShifter;
+            public bool OriginalShifter;
+            public bool ShifterOverridden;
+            public float LastHShifterInputTime;
             public bool LocalWantsControl;
             public float LastOwnershipRequestTime;
             public float LastOwnershipLogTime;
@@ -3175,6 +4085,7 @@ namespace MyWinterCarMpMod.Sync
             public float LastDriverLogTime;
             public float LastAxisLogTime;
             public float ForceOwnershipUntilTime;
+            public float ForceStateSendUntilTime;
             public float LastSeatTraceTime;
             public Dictionary<int, string> SeatFsmStateNames;
             public Dictionary<int, string> SeatFsmEventNames;
@@ -3183,6 +4094,18 @@ namespace MyWinterCarMpMod.Sync
             public bool WheelsDisabled;
             public bool LastSentDriverInSeat;
             public bool LastSentPassengerInSeat;
+            public bool InputCacheValid;
+            public float LastInputSampleTime;
+            public float CachedThrottle;
+            public float CachedBrake;
+            public float CachedSteer;
+            public float CachedHandbrake;
+            public float CachedClutch;
+            public bool PendingStartEngine;
+            public int PendingGearDelta;
+            public int PendingShifterGear;
+            public bool PendingShifterGearValid;
+            public float LastInputLogTime;
         }
 
         private sealed class VehicleCandidate

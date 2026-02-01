@@ -101,6 +101,7 @@
     <Compile Include="Sync\MPCarController.cs" />
     <Compile Include="Sync\RemotePlayerAvatar.cs" />
     <Compile Include="Sync\TimeOfDaySync.cs" />
+    <Compile Include="Sync\WeatherScanner.cs" />
     <Compile Include="Sync\VehicleSync.cs" />
     <Compile Include="UI\Overlay.cs" />
     <Compile Include="Util\MainThreadDispatcher.cs" />

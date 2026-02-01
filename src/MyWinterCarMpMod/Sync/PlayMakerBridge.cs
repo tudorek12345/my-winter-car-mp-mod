@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using HutongGames.PlayMaker;
 using UnityEngine;
 
@@ -8,6 +9,10 @@ namespace MyWinterCarMpMod.Sync
     internal static class PlayMakerBridge
     {
         private static readonly string[] DefaultDoorEventNames = new[] { "OPEN", "CLOSE" };
+        private static MethodInfo _fsmSetStateMethod;
+        private static MethodInfo _fsmChangeStateStringMethod;
+        private static MethodInfo _fsmSwitchStateMethod;
+        private static bool _fsmStateMethodsCached;
 
         public static PlayMakerFSM FindFsmByName(GameObject obj, string fsmName)
         {
@@ -172,6 +177,52 @@ namespace MyWinterCarMpMod.Sync
             transition.ToState = stateName;
             transitions.Add(transition);
             fsm.Fsm.GlobalTransitions = transitions.ToArray();
+        }
+
+        public static bool TrySetState(PlayMakerFSM fsm, string stateName)
+        {
+            if (fsm == null || fsm.Fsm == null || string.IsNullOrEmpty(stateName))
+            {
+                return false;
+            }
+
+            CacheStateMethods(fsm.Fsm);
+
+            if (_fsmSwitchStateMethod != null)
+            {
+                FsmState target = fsm.Fsm.GetState(stateName);
+                if (target != null)
+                {
+                    _fsmSwitchStateMethod.Invoke(fsm.Fsm, new object[] { target });
+                    return true;
+                }
+            }
+            if (_fsmSetStateMethod != null)
+            {
+                _fsmSetStateMethod.Invoke(fsm.Fsm, new object[] { stateName });
+                return true;
+            }
+            if (_fsmChangeStateStringMethod != null)
+            {
+                _fsmChangeStateStringMethod.Invoke(fsm.Fsm, new object[] { stateName });
+                return true;
+            }
+
+            return false;
+        }
+
+        private static void CacheStateMethods(object fsmInstance)
+        {
+            if (_fsmStateMethodsCached || fsmInstance == null)
+            {
+                return;
+            }
+
+            Type type = fsmInstance.GetType();
+            _fsmSetStateMethod = type.GetMethod("SetState", new[] { typeof(string) });
+            _fsmChangeStateStringMethod = type.GetMethod("ChangeState", new[] { typeof(string) });
+            _fsmSwitchStateMethod = type.GetMethod("SwitchState", BindingFlags.Instance | BindingFlags.NonPublic, null, new[] { typeof(FsmState) }, null);
+            _fsmStateMethodsCached = true;
         }
 
         public static void PrependAction(FsmState state, FsmStateAction action)

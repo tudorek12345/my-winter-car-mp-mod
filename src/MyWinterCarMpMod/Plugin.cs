@@ -30,6 +30,7 @@ namespace MyWinterCarMpMod
         private PickupSync _pickupSync;
         private TimeOfDaySync _timeSync;
         private NpcSync _npcSync;
+        private WeatherScanner _weatherScanner;
         private ITransport _transport;
         private LanDiscovery _lanDiscovery;
         private Vector2 _lanScroll;
@@ -84,6 +85,7 @@ namespace MyWinterCarMpMod
             _pickupSync = new PickupSync(_settings);
             _timeSync = new TimeOfDaySync(_settings);
             _npcSync = new NpcSync(_settings);
+            _weatherScanner = new WeatherScanner(_settings);
             _devFreecam = new DevFreecam();
             _overlayVisible = _settings.OverlayEnabled.Value;
             _buildId = Application.version + "|" + Application.unityVersion;
@@ -133,6 +135,7 @@ namespace MyWinterCarMpMod
             {
                 bool allowScan = !IsMainMenuScene();
                 _vehicleSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
+                _vehicleSync.UpdateInputCache(Time.realtimeSinceStartup);
             }
 
             if (_pickupSync != null && _levelSync != null)
@@ -155,11 +158,19 @@ namespace MyWinterCarMpMod
                 _npcSync.Update(Time.realtimeSinceStartup);
             }
 
+            if (_weatherScanner != null && _levelSync != null)
+            {
+                bool allowScan = !IsMainMenuScene();
+                _weatherScanner.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
+                _weatherScanner.Update(Time.realtimeSinceStartup);
+            }
+
             if (_settings.VerboseLogging.Value && _levelSync != null)
             {
                 bool allowScan = !IsMainMenuScene();
                 PlayMakerScanner.ScanInteractiveFsms(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
                 PlayMakerScanner.ScanVehicleDoorFsms(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan, "sorbet");
+                PlayMakerScanner.ScanScrapeFsms(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan, "sorbet");
             }
 
             if (_settings.Mode.Value == Mode.Host && _hostSession != null)
@@ -428,7 +439,7 @@ namespace MyWinterCarMpMod
                     PlayerStateData state = ApplySeatOverride(_hostSession.LatestClientState, out seatOverride);
                     float posSmooth = seatOverride ? 1f : _settings.GetSmoothingPosition();
                     float rotSmooth = seatOverride ? 1f : _settings.GetSmoothingRotation();
-                    _remoteAvatar.Update(state, true, allowApply, posSmooth, rotSmooth);
+                    _remoteAvatar.Update(state, true, allowApply, posSmooth, rotSmooth, seatOverride);
                 }
             }
             else if (_settings.Mode.Value == Mode.Client)
@@ -445,7 +456,7 @@ namespace MyWinterCarMpMod
                     PlayerStateData state = ApplySeatOverride(_clientSession.LatestHostState, out seatOverride);
                     float posSmooth = seatOverride ? 1f : _settings.GetSmoothingPosition();
                     float rotSmooth = seatOverride ? 1f : _settings.GetSmoothingRotation();
-                    _remoteAvatar.Update(state, true, allowApply, posSmooth, rotSmooth);
+                    _remoteAvatar.Update(state, true, allowApply, posSmooth, rotSmooth, seatOverride);
                 }
             }
             else

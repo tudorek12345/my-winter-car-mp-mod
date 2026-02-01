@@ -62,6 +62,7 @@ namespace MyWinterCarMpMod.Net
         private readonly System.Collections.Generic.List<ScrapeStateData> _scrapeSendBuffer = new System.Collections.Generic.List<ScrapeStateData>(16);
         private readonly System.Collections.Generic.List<OwnershipRequestData> _ownershipRequestBuffer = new System.Collections.Generic.List<OwnershipRequestData>(16);
         private float _nextStateLogTime;
+        private float _nextScrapeReceiveLogTime;
         private int _pendingLevelIndex = int.MinValue;
         private string _pendingLevelName = string.Empty;
         private bool _sceneReadySent;
@@ -410,9 +411,26 @@ namespace MyWinterCarMpMod.Net
                     break;
                 case MessageType.LevelChange:
                     DebugLog.Info("LevelChange received. Session=" + message.LevelChange.SessionId + " Index=" + message.LevelChange.LevelIndex + " Name=" + message.LevelChange.LevelName);
+                    int currentIndex = _levelSync != null ? _levelSync.CurrentLevelIndex : int.MinValue;
+                    string currentName = _levelSync != null ? (_levelSync.CurrentLevelName ?? string.Empty) : string.Empty;
+                    string incomingName = message.LevelChange.LevelName ?? string.Empty;
+                    bool sameIndex = message.LevelChange.LevelIndex >= 0 && currentIndex == message.LevelChange.LevelIndex;
+                    bool sameName = !string.IsNullOrEmpty(incomingName) && incomingName == currentName;
+                    if (sameIndex || sameName)
+                    {
+                        if (_sceneReadySent && _worldStateReceived)
+                        {
+                            if (_verbose)
+                            {
+                                DebugLog.Verbose("LevelChange ignored (already synced). Index=" + message.LevelChange.LevelIndex + " Name=" + incomingName);
+                            }
+                            break;
+                        }
+                    }
+
                     _levelSync.ApplyLevelChange(message.LevelChange.LevelIndex, message.LevelChange.LevelName);
                     _pendingLevelIndex = message.LevelChange.LevelIndex;
-                    _pendingLevelName = message.LevelChange.LevelName ?? string.Empty;
+                    _pendingLevelName = incomingName;
                     _sceneReadySent = false;
                     _worldStateReceived = false;
                     break;
@@ -472,6 +490,18 @@ namespace MyWinterCarMpMod.Net
                 case MessageType.ScrapeState:
                     if (_doorSync != null)
                     {
+                        if (_verbose)
+                        {
+                            float now = Time.realtimeSinceStartup;
+                            if (now >= _nextScrapeReceiveLogTime)
+                            {
+                                DebugLog.Verbose("Client: recv scrape id=" + message.ScrapeState.DoorId +
+                                    " layer=" + message.ScrapeState.Layer +
+                                    " x=" + message.ScrapeState.X.ToString("F2") +
+                                    " dist=" + message.ScrapeState.Distance.ToString("F2"));
+                                _nextScrapeReceiveLogTime = now + 1f;
+                            }
+                        }
                         _doorSync.ApplyRemoteScrapeState(message.ScrapeState);
                     }
                     break;

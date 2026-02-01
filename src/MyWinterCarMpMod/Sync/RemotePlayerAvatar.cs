@@ -16,20 +16,27 @@ namespace MyWinterCarMpMod.Sync
         private Renderer[] _renderers;
         private AssetBundle _bundle;
         private bool _bundleFailed;
+        private Transform _modelRoot;
+        private Vector3 _modelBaseLocalPosition;
+        private Quaternion _modelBaseLocalRotation = Quaternion.identity;
+        private bool _seated;
+        private Vector3 _seatOffset;
+        private Quaternion _seatRotation = Quaternion.identity;
+        private Vector3 _walkOffset;
+        private Quaternion _walkRotation = Quaternion.identity;
+        private float _walkPhase;
+        private float _lastWalkTime;
+        private Vector3 _lastTargetPos;
+        private bool _hasLastTargetPos;
 
         public RemotePlayerAvatar(Settings settings)
         {
             _settings = settings;
         }
 
-        public void Update(PlayerStateData state, bool hasState, bool allowApply, float positionSmoothing, float rotationSmoothing)
+        public void Update(PlayerStateData state, bool hasState, bool allowApply, float positionSmoothing, float rotationSmoothing, bool isSeated)
         {
             if (!allowApply || !hasState)
-            {
-                return;
-            }
-
-            if (state.UnixTimeMs > 0 && state.UnixTimeMs <= _lastStateTimeMs)
             {
                 return;
             }
@@ -39,6 +46,14 @@ namespace MyWinterCarMpMod.Sync
             Vector3 targetPos = new Vector3(state.PosX, state.PosY, state.PosZ);
             Quaternion viewRot = new Quaternion(state.ViewRotX, state.ViewRotY, state.ViewRotZ, state.ViewRotW);
             Quaternion targetRot = YawFrom(viewRot);
+
+            UpdateSeatPose(isSeated);
+            UpdateWalkPose(targetPos, isSeated);
+
+            if (state.UnixTimeMs > 0 && state.UnixTimeMs <= _lastStateTimeMs)
+            {
+                return;
+            }
 
             Transform t = _avatar.transform;
             float posLerp = Clamp01(positionSmoothing);
@@ -67,6 +82,15 @@ namespace MyWinterCarMpMod.Sync
             }
             _initialized = false;
             _lastStateTimeMs = 0;
+            _modelRoot = null;
+            _seated = false;
+            _seatOffset = Vector3.zero;
+            _seatRotation = Quaternion.identity;
+            _walkOffset = Vector3.zero;
+            _walkRotation = Quaternion.identity;
+            _walkPhase = 0f;
+            _lastWalkTime = 0f;
+            _hasLastTargetPos = false;
         }
 
         private void EnsureAvatar()
@@ -92,6 +116,10 @@ namespace MyWinterCarMpMod.Sync
                 CreatePrimitiveChild(modelRoot, "ArmR", PrimitiveType.Cube, new Vector3(0.3f, 1.1f, 0f), new Vector3(0.15f, 0.45f, 0.15f));
                 ApplyAvatarTransform(modelRoot);
             }
+
+            _modelRoot = modelRoot;
+            _modelBaseLocalPosition = modelRoot.localPosition;
+            _modelBaseLocalRotation = modelRoot.localRotation;
 
             _renderers = _avatar.GetComponentsInChildren<Renderer>(true);
             SetColor(new Color(0.2f, 0.8f, 1f, 0.9f));
@@ -416,6 +444,97 @@ namespace MyWinterCarMpMod.Sync
                 return 1f;
             }
             return value;
+        }
+
+        private void UpdateSeatPose(bool seated)
+        {
+            if (_modelRoot == null)
+            {
+                return;
+            }
+
+            if (seated == _seated)
+            {
+                return;
+            }
+
+            _seated = seated;
+            if (seated)
+            {
+                _seatOffset = new Vector3(0f, -0.75f, -0.12f);
+                _seatRotation = Quaternion.Euler(5f, 0f, 0f);
+            }
+            else
+            {
+                _seatOffset = Vector3.zero;
+                _seatRotation = Quaternion.identity;
+            }
+            ApplyModelOffsets();
+        }
+
+        private void UpdateWalkPose(Vector3 targetPos, bool seated)
+        {
+            if (_modelRoot == null)
+            {
+                return;
+            }
+
+            if (seated)
+            {
+                _walkOffset = Vector3.zero;
+                _walkRotation = Quaternion.identity;
+                _walkPhase = 0f;
+                _hasLastTargetPos = false;
+                ApplyModelOffsets();
+                return;
+            }
+
+            float now = Time.realtimeSinceStartup;
+            if (!_hasLastTargetPos)
+            {
+                _lastTargetPos = targetPos;
+                _lastWalkTime = now;
+                _hasLastTargetPos = true;
+                _walkOffset = Vector3.zero;
+                _walkRotation = Quaternion.identity;
+                ApplyModelOffsets();
+                return;
+            }
+
+            float delta = Mathf.Max(0.001f, now - _lastWalkTime);
+            float speed = Vector3.Distance(targetPos, _lastTargetPos) / delta;
+            _lastTargetPos = targetPos;
+            _lastWalkTime = now;
+
+            if (speed > 0.15f)
+            {
+                float phaseSpeed = Mathf.Clamp(speed * 6f, 2f, 10f);
+                _walkPhase += delta * phaseSpeed;
+                float bob = Mathf.Sin(_walkPhase) * 0.05f;
+                float sway = Mathf.Sin(_walkPhase * 0.5f) * 0.04f;
+                float roll = Mathf.Sin(_walkPhase * 2f) * 6f;
+                _walkOffset = new Vector3(sway, bob, 0f);
+                _walkRotation = Quaternion.Euler(0f, 0f, roll);
+            }
+            else
+            {
+                _walkPhase = 0f;
+                _walkOffset = Vector3.zero;
+                _walkRotation = Quaternion.identity;
+            }
+
+            ApplyModelOffsets();
+        }
+
+        private void ApplyModelOffsets()
+        {
+            if (_modelRoot == null)
+            {
+                return;
+            }
+
+            _modelRoot.localPosition = _modelBaseLocalPosition + _seatOffset + _walkOffset;
+            _modelRoot.localRotation = _modelBaseLocalRotation * _seatRotation * _walkRotation;
         }
     }
 }

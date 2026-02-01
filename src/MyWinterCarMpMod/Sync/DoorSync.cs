@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using BepInEx;
 using HutongGames.PlayMaker;
 using MyWinterCarMpMod.Config;
@@ -18,7 +19,8 @@ namespace MyWinterCarMpMod.Sync
         private const float RemoteSuppressSeconds = 0.2f;
         private const float RemoteApplySeconds = 0.35f;
         private const float VehicleHingeDeadzone = 3f;
-        private const float EventOnlyRepeatSeconds = 0.45f;
+        private const float EventOnlyRepeatSeconds = 0.9f;
+        private const float ScrapeLocalHoldSeconds = 0.75f;
         private static readonly string[] DoorTokens = new[]
         {
             "door", "ovi", "hatch", "hatchback", "boot", "bootlid", "lid", "gate", "trunk", "hood", "bonnet", "fridge", "freezer", "refrigerator", "icebox"
@@ -50,6 +52,11 @@ namespace MyWinterCarMpMod.Sync
         {
             "heat", "heater", "temp", "blower", "fan", "defrost", "defog", "window", "ice", "scrape", "snow"
         };
+        private static readonly string[] ScrapeStateTokensLayer1 = new[] { "scrape 1", "scrape1" };
+        private static readonly string[] ScrapeStateTokensLayer2 = new[] { "scrape 2", "scrape2" };
+        private static readonly string[] ScrapeStateTokensGlass = new[] { "get this glass", "get glass", "glass" };
+        private static readonly string[] ScrapeStateTokensAny = new[] { "scrape" };
+        private const float ScrapeFinishDistance = 0.02f;
 
         private readonly Settings _settings;
         private VehicleSync _vehicleSync;
@@ -68,6 +75,8 @@ namespace MyWinterCarMpMod.Sync
         private float _nextHingeSendLogTime;
         private float _nextHingeApplyLogTime;
         private float _nextScrapeLogTime;
+        private float _nextScrapeForceLogTime;
+        private float _nextScrapeAuthorityLogTime;
         private float _nextDashboardSampleTime;
         private float _nextDashboardSummaryTime;
         private float _lastDashboardSendTime;
@@ -484,9 +493,32 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
-            entry.LastRemoteScrapeSequence = state.Sequence;
             float now = Time.realtimeSinceStartup;
+            bool localScrapeRecent = entry.LastLocalScrapeTime > 0f && now - entry.LastLocalScrapeTime <= 0.25f;
+            if (now < entry.ScrapeLocalAuthorityUntil && localScrapeRecent)
+            {
+                if (_settings != null && _settings.VerboseLogging.Value && now >= _nextScrapeAuthorityLogTime)
+                {
+                    DebugLog.Verbose("DoorSync: skip remote scrape (local active) id=" + entry.Id +
+                        " path=" + entry.DebugPath);
+                    _nextScrapeAuthorityLogTime = now + 1f;
+                }
+                return;
+            }
+
+            entry.LastRemoteScrapeSequence = state.Sequence;
             entry.ScrapeSuppressUntilTime = now + 0.5f;
+
+            bool changed = state.Layer != entry.LastScrapeLayer ||
+                Mathf.Abs(state.X - entry.LastScrapeX) > 0.01f ||
+                Mathf.Abs(state.Xold - entry.LastScrapeXold) > 0.01f ||
+                Mathf.Abs(state.Distance - entry.LastScrapeDistance) > 0.001f;
+
+            bool progressed = state.Layer > entry.LastScrapeLayer ||
+                state.Distance < entry.LastScrapeDistance - 0.001f ||
+                Mathf.Abs(state.X - entry.LastScrapeX) > 0.5f ||
+                Mathf.Abs(state.Xold - entry.LastScrapeXold) > 0.5f;
+            bool shouldKick = changed || progressed;
 
             if (entry.ScrapeLayer != null)
             {
@@ -510,20 +542,25 @@ namespace MyWinterCarMpMod.Sync
             entry.LastScrapeXold = state.Xold;
             entry.LastScrapeDistance = state.Distance;
 
-            bool sentAction = false;
-            if (entry.Fsm.Fsm.HasEvent("DOWN"))
+            if (entry.ScrapeInside != null)
             {
+                entry.ScrapeInside.Value = true;
+                entry.ScrapeRemoteHoldUntil = now + 0.5f;
+            }
+
+            if (shouldKick && entry.Fsm.Fsm.HasEvent("DOWN"))
+            {
+                EnsureGlobalTransitionForEvent(entry.Fsm, "DOWN");
                 entry.Fsm.SendEvent("DOWN");
-                sentAction = true;
             }
-            if (entry.Fsm.Fsm.HasEvent("SCRAPE"))
+            if (shouldKick && entry.Fsm.Fsm.HasEvent("SCRAPE"))
             {
+                EnsureGlobalTransitionForEvent(entry.Fsm, "SCRAPE");
                 entry.Fsm.SendEvent("SCRAPE");
-                sentAction = true;
             }
-            if (sentAction && entry.Fsm.Fsm.HasEvent("OFF"))
+            if (shouldKick)
             {
-                entry.Fsm.SendEvent("OFF");
+                TryForceScrapeState(entry, state);
             }
 
             if (_settings != null && _settings.VerboseLogging.Value && now >= _nextScrapeLogTime)
@@ -1029,6 +1066,8 @@ namespace MyWinterCarMpMod.Sync
             _nextHingeSendLogTime = 0f;
             _nextHingeApplyLogTime = 0f;
             _nextScrapeLogTime = 0f;
+            _nextScrapeForceLogTime = 0f;
+            _nextScrapeAuthorityLogTime = 0f;
             _nextDashboardSampleTime = 0f;
             _nextDashboardSummaryTime = 0f;
             _lastDashboardSendTime = 0f;
@@ -1986,7 +2025,7 @@ namespace MyWinterCarMpMod.Sync
                 allowAnyEvent = !IsSorbetDoor(entry.DebugPath, entry.Transform);
             }
 
-            if (kind == InteractionKind.Tap && IsSorbetDoor(entry.DebugPath, entry.Transform))
+            if (kind == InteractionKind.Tap)
             {
                 if (AttachPlayMakerEventOnly(fsm, entry, doorName, openEventTokens, closeEventTokens))
                 {
@@ -2231,6 +2270,123 @@ namespace MyWinterCarMpMod.Sync
             PlayMakerBridge.AddGlobalTransition(fsm, ev, target.Name);
         }
 
+        private static void EnsureGlobalTransitionForState(PlayMakerFSM fsm, string eventName, string stateName)
+        {
+            if (fsm == null || fsm.Fsm == null || string.IsNullOrEmpty(eventName) || string.IsNullOrEmpty(stateName))
+            {
+                return;
+            }
+
+            FsmEvent ev = PlayMakerBridge.GetOrCreateEvent(fsm, eventName);
+            if (HasGlobalTransition(fsm, ev))
+            {
+                return;
+            }
+
+            PlayMakerBridge.AddGlobalTransition(fsm, ev, stateName);
+        }
+
+        private static string BuildScrapeStateEventName(string stateName)
+        {
+            if (string.IsNullOrEmpty(stateName))
+            {
+                return null;
+            }
+
+            StringBuilder builder = new StringBuilder("MP_SCRAPE_STATE_");
+            for (int i = 0; i < stateName.Length; i++)
+            {
+                char ch = stateName[i];
+                if (char.IsLetterOrDigit(ch))
+                {
+                    builder.Append(char.ToUpperInvariant(ch));
+                }
+                else
+                {
+                    builder.Append('_');
+                }
+            }
+            return builder.ToString();
+        }
+
+        private static FsmState FindScrapeTargetState(PlayMakerFSM fsm, int layer, float distance)
+        {
+            if (fsm == null || fsm.Fsm == null)
+            {
+                return null;
+            }
+
+            if (distance <= ScrapeFinishDistance || layer <= 0)
+            {
+                FsmState finishState = PlayMakerBridge.FindStateByNameContains(fsm, ScrapeStateTokensGlass);
+                if (finishState != null)
+                {
+                    return finishState;
+                }
+            }
+
+            if (layer <= 1)
+            {
+                FsmState layerOne = PlayMakerBridge.FindStateByNameContains(fsm, ScrapeStateTokensLayer1);
+                if (layerOne != null)
+                {
+                    return layerOne;
+                }
+            }
+            else
+            {
+                FsmState layerTwo = PlayMakerBridge.FindStateByNameContains(fsm, ScrapeStateTokensLayer2);
+                if (layerTwo != null)
+                {
+                    return layerTwo;
+                }
+            }
+
+            return PlayMakerBridge.FindStateByNameContains(fsm, ScrapeStateTokensAny);
+        }
+
+        private bool TryForceScrapeState(DoorEntry entry, ScrapeStateData state)
+        {
+            if (entry == null || entry.Fsm == null)
+            {
+                return false;
+            }
+
+            FsmState target = FindScrapeTargetState(entry.Fsm, state.Layer, state.Distance);
+            if (target == null)
+            {
+                return false;
+            }
+
+            bool switched = PlayMakerBridge.TrySetState(entry.Fsm, target.Name);
+            if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                float now = Time.realtimeSinceStartup;
+                if (now >= _nextScrapeForceLogTime)
+                {
+                    DebugLog.Verbose("DoorSync: scrape force state fsm=" + entry.Fsm.FsmName +
+                        " target=" + target.Name +
+                        " switched=" + switched +
+                        " path=" + entry.DebugPath);
+                    _nextScrapeForceLogTime = now + 0.5f;
+                }
+            }
+            if (switched)
+            {
+                return true;
+            }
+
+            string eventName = BuildScrapeStateEventName(target.Name);
+            if (string.IsNullOrEmpty(eventName))
+            {
+                return false;
+            }
+
+            EnsureGlobalTransitionForState(entry.Fsm, eventName, target.Name);
+            entry.Fsm.SendEvent(eventName);
+            return true;
+        }
+
         private static string[] BuildEventTokens(string eventName)
         {
             if (string.IsNullOrEmpty(eventName))
@@ -2417,17 +2573,6 @@ namespace MyWinterCarMpMod.Sync
                 }
             }
 
-            if (entry.LastDoorOpen == open)
-            {
-                float debounce = entry.EventOnly ? 0.15f : 0.25f;
-                if (now - entry.LastLocalChangeTime < debounce)
-                {
-                    return;
-                }
-            }
-
-            entry.LastDoorOpen = open;
-            entry.LastLocalChangeTime = now;
             string eventName = NormalizeDoorEventName(triggerEvent);
             if (!entry.EventOnly && !string.IsNullOrEmpty(triggerEvent) && IsNoiseEventName(triggerEvent))
             {
@@ -2441,23 +2586,10 @@ namespace MyWinterCarMpMod.Sync
             }
             if (entry.EventOnly)
             {
-                bool isScrape = IsScrapeEntry(entry);
                 bool isHeater = IsSorbetHeaterButton(entry);
                 bool isWindowHeater = isHeater && IsSorbetWindowHeater(entry);
 
-                if (isScrape)
-                {
-                    if (string.IsNullOrEmpty(eventName))
-                    {
-                        return;
-                    }
-                    if (!IsScrapeEvent(eventName))
-                    {
-                        return;
-                    }
-                    open = !string.Equals(eventName, "OFF", StringComparison.OrdinalIgnoreCase);
-                }
-                else if (isHeater && !isWindowHeater)
+                if (isHeater && !isWindowHeater)
                 {
                     if (!IsHeaterStepEvent(eventName))
                     {
@@ -2465,14 +2597,38 @@ namespace MyWinterCarMpMod.Sync
                     }
                 }
 
-                if (!string.IsNullOrEmpty(eventName) && IsUseLikeEvent(eventName))
+                bool isUseLike = !string.IsNullOrEmpty(eventName) && IsUseLikeEvent(eventName);
+                if (isUseLike)
                 {
+                    entry.LastUseTime = now;
                     bool doorOpen = entry.DoorOpenBool != null ? entry.DoorOpenBool.Value : !entry.LastDoorOpen;
+                    if (entry.DoorOpenBool != null && doorOpen == entry.LastDoorOpen)
+                    {
+                        doorOpen = !entry.LastDoorOpen;
+                    }
                     open = doorOpen;
                     string mapped = doorOpen ? entry.OpenEventName : entry.CloseEventName;
                     if (!string.IsNullOrEmpty(mapped) && !string.Equals(mapped, eventName, StringComparison.OrdinalIgnoreCase))
                     {
                         eventName = mapped;
+                    }
+                }
+                else if (!string.IsNullOrEmpty(eventName))
+                {
+                    bool isOpenCloseEvent = string.Equals(eventName, entry.OpenEventName, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(eventName, entry.CloseEventName, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(eventName, "ON", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(eventName, "OFF", StringComparison.OrdinalIgnoreCase);
+                    if (isOpenCloseEvent)
+                    {
+                        entry.LastUseTime = now;
+                    }
+
+                    bool isOffEvent = string.Equals(eventName, entry.CloseEventName, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(eventName, "OFF", StringComparison.OrdinalIgnoreCase);
+                    if (isOffEvent && !open && entry.LastDoorOpen == open && now - entry.LastUseTime > 0.5f)
+                    {
+                        return;
                     }
                 }
 
@@ -2489,7 +2645,17 @@ namespace MyWinterCarMpMod.Sync
                     entry.LastEventTime = now;
                 }
             }
+            if (entry.LastDoorOpen == open)
+            {
+                float debounce = entry.EventOnly ? 0.15f : 0.25f;
+                if (now - entry.LastLocalChangeTime < debounce)
+                {
+                    return;
+                }
+            }
+
             entry.LastDoorOpen = open;
+            entry.LastLocalChangeTime = now;
             if (entry.EventOnly && string.IsNullOrEmpty(eventName))
             {
                 return;
@@ -2891,6 +3057,14 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
+            if (entry.ScrapeInside != null &&
+                now > entry.ScrapeRemoteHoldUntil &&
+                now > entry.ScrapeLocalAuthorityUntil &&
+                entry.ScrapeInside.Value)
+            {
+                entry.ScrapeInside.Value = false;
+            }
+
             if (now < entry.ScrapeSuppressUntilTime)
             {
                 return;
@@ -2911,6 +3085,35 @@ namespace MyWinterCarMpMod.Sync
                 Mathf.Abs(xold - entry.LastScrapeXold) > 0.01f ||
                 Mathf.Abs(dist - entry.LastScrapeDistance) > 0.001f;
 
+            bool hasAuthority = HasScrapeAuthority(entry, now);
+            if (!hasAuthority)
+            {
+                if (changed)
+                {
+                    entry.LastScrapeLayer = layer;
+                    entry.LastScrapeX = x;
+                    entry.LastScrapeXold = xold;
+                    entry.LastScrapeDistance = dist;
+                    entry.ScrapeDirtyWhileRemote = true;
+
+                    if (_settings != null && _settings.VerboseLogging.Value && now >= _nextScrapeAuthorityLogTime)
+                    {
+                        DebugLog.Verbose("DoorSync: scrape change suppressed (no authority) id=" + entry.Id +
+                            " layer=" + layer +
+                            " x=" + x.ToString("F2") +
+                            " dist=" + dist.ToString("F2") +
+                            " path=" + entry.DebugPath);
+                        _nextScrapeAuthorityLogTime = now + 1f;
+                    }
+                }
+                return;
+            }
+
+            if (!changed && entry.ScrapeDirtyWhileRemote)
+            {
+                changed = true;
+            }
+
             if (!changed)
             {
                 return;
@@ -2920,6 +3123,12 @@ namespace MyWinterCarMpMod.Sync
             entry.LastScrapeX = x;
             entry.LastScrapeXold = xold;
             entry.LastScrapeDistance = dist;
+            if (entry.ScrapeInside != null && entry.ScrapeInside.Value)
+            {
+                entry.LastLocalScrapeTime = now;
+            }
+            entry.ScrapeLocalAuthorityUntil = now + ScrapeLocalHoldSeconds;
+            entry.ScrapeDirtyWhileRemote = false;
 
             _scrapeStateQueue.Add(new ScrapeStateData
             {
@@ -2957,6 +3166,7 @@ namespace MyWinterCarMpMod.Sync
             entry.ScrapeX = FindFloatByName(entry.Fsm, "X");
             entry.ScrapeXold = FindFloatByName(entry.Fsm, "Xold");
             entry.ScrapeDistance = FindFloatByName(entry.Fsm, "Distance");
+            entry.ScrapeInside = FindBoolByName(entry.Fsm, "Inside");
 
             if (entry.ScrapeLayer == null || entry.ScrapeX == null || entry.ScrapeXold == null || entry.ScrapeDistance == null)
             {
@@ -2977,6 +3187,37 @@ namespace MyWinterCarMpMod.Sync
             entry.LastScrapeX = entry.ScrapeX.Value;
             entry.LastScrapeXold = entry.ScrapeXold.Value;
             entry.LastScrapeDistance = entry.ScrapeDistance.Value;
+
+            if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                FsmBool inside = FindBoolByName(entry.Fsm, "Inside");
+                FsmString eventNameVar = FindStringByName(entry.Fsm, "EventName");
+                DebugLog.Verbose("DoorSync: scrape bind id=" + entry.Id +
+                    " fsm=" + GetFsmName(entry.Fsm) +
+                    " layer=" + entry.ScrapeLayer.Name +
+                    " x=" + entry.ScrapeX.Name +
+                    " xold=" + entry.ScrapeXold.Name +
+                    " dist=" + entry.ScrapeDistance.Name +
+                    " inside=" + (inside != null ? inside.Name : "<null>") +
+                    " eventName=" + (eventNameVar != null ? eventNameVar.Value : "<null>") +
+                    " path=" + entry.DebugPath);
+            }
+        }
+
+        private bool HasScrapeAuthority(DoorEntry entry, float now)
+        {
+            if (entry == null)
+            {
+                return false;
+            }
+
+            if (!IsSorbetDoor(entry.DebugPath, entry.Transform))
+            {
+                return true;
+            }
+
+            // Allow sorbet scraping from any local player to avoid authority deadlocks.
+            return true;
         }
 
         private void EnsureSorbetControlBindings()
@@ -3398,6 +3639,56 @@ namespace MyWinterCarMpMod.Sync
             for (int i = 0; i < values.Length; i++)
             {
                 FsmFloat value = values[i];
+                if (value != null && string.Equals(value.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return value;
+                }
+            }
+
+            return null;
+        }
+
+        private static FsmBool FindBoolByName(PlayMakerFSM fsm, string name)
+        {
+            if (fsm == null || fsm.FsmVariables == null || string.IsNullOrEmpty(name))
+            {
+                return null;
+            }
+
+            FsmBool[] values = fsm.FsmVariables.BoolVariables;
+            if (values == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                FsmBool value = values[i];
+                if (value != null && string.Equals(value.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return value;
+                }
+            }
+
+            return null;
+        }
+
+        private static FsmString FindStringByName(PlayMakerFSM fsm, string name)
+        {
+            if (fsm == null || fsm.FsmVariables == null || string.IsNullOrEmpty(name))
+            {
+                return null;
+            }
+
+            FsmString[] values = fsm.FsmVariables.StringVariables;
+            if (values == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                FsmString value = values[i];
                 if (value != null && string.Equals(value.Name, name, StringComparison.OrdinalIgnoreCase))
                 {
                     return value;
@@ -3878,6 +4169,7 @@ namespace MyWinterCarMpMod.Sync
             public string LastEventName;
             public bool LastEventOpen;
             public float LastEventTime;
+            public float LastUseTime;
             public float SuppressPlayMakerUntilTime;
             public uint LastRemoteEventSequence;
             public bool HasScrapeState;
@@ -3885,12 +4177,17 @@ namespace MyWinterCarMpMod.Sync
             public FsmFloat ScrapeX;
             public FsmFloat ScrapeXold;
             public FsmFloat ScrapeDistance;
+            public FsmBool ScrapeInside;
             public int LastScrapeLayer;
             public float LastScrapeX;
             public float LastScrapeXold;
             public float LastScrapeDistance;
             public uint LastRemoteScrapeSequence;
             public float ScrapeSuppressUntilTime;
+            public float ScrapeLocalAuthorityUntil;
+            public float ScrapeRemoteHoldUntil;
+            public float LastLocalScrapeTime;
+            public bool ScrapeDirtyWhileRemote;
         }
 
         private sealed class SorbetControlBinding

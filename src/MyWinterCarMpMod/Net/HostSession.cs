@@ -293,8 +293,11 @@ namespace MyWinterCarMpMod.Net
                 if (now >= _nextLevelSyncTime)
                 {
                     _nextLevelSyncTime = now + _settings.GetLevelSyncIntervalSeconds();
-                    SendLevelChangeInternal(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, false);
-                    DebugLog.Verbose("Level resync sent. Level=" + _levelSync.CurrentLevelName + " Index=" + _levelSync.CurrentLevelIndex);
+                    if (!_clientSceneReady || !_worldStateAcked)
+                    {
+                        SendLevelChangeInternal(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, false);
+                        DebugLog.Verbose("Level resync sent. Level=" + _levelSync.CurrentLevelName + " Index=" + _levelSync.CurrentLevelIndex);
+                    }
                 }
             }
         }
