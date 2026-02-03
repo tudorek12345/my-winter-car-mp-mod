@@ -104,6 +104,153 @@ namespace MyWinterCarMpMod.Sync
             get { return _settings != null && _settings.DoorSyncEnabled.Value; }
         }
 
+        internal bool IsBusPath(string debugPath)
+        {
+            if (string.IsNullOrEmpty(debugPath))
+            {
+                return false;
+            }
+
+            // BUS is under NPC_CARS in current dumps/logs, but keep it flexible.
+            if (debugPath.IndexOf("NPC_CARS", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return false;
+            }
+
+            return debugPath.IndexOf("/BUS", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   debugPath.IndexOf("BUS#", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        internal bool TryRegisterBusFsm(PlayMakerFSM fsm, string debugPath)
+        {
+            if (!Enabled || _settings == null || !_settings.DoorPlayMakerEnabled.Value)
+            {
+                return false;
+            }
+
+            if (fsm == null || fsm.Fsm == null || fsm.transform == null)
+            {
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(debugPath))
+            {
+                debugPath = BuildDebugPath(fsm.transform);
+            }
+
+            if (!IsBusPath(debugPath))
+            {
+                return false;
+            }
+
+            string fsmName = GetFsmName(fsm);
+            string[] openTokens = new[] { "OPEN", "ON" };
+            string[] closeTokens = new[] { "CLOSE", "OFF" };
+
+            if (string.Equals(fsmName, "Start", StringComparison.OrdinalIgnoreCase))
+            {
+                openTokens = new[] { "START", "ON" };
+                closeTokens = new[] { "STOP", "OFF" };
+            }
+            else if (!string.Equals(fsmName, "Door", StringComparison.OrdinalIgnoreCase))
+            {
+                openTokens = new[] { "OPEN", "START", "ON" };
+                closeTokens = new[] { "CLOSE", "STOP", "OFF" };
+            }
+
+            DoorEntry existing = FindDoorByPath(debugPath);
+            if (existing != null)
+            {
+                // Force event-only + allow-any-event for bus FSMs (host authoritative).
+                existing.InteractionKind = InteractionKind.Tap;
+
+                bool attached = AttachPlayMakerEventOnly(fsm, existing, fsmName, openTokens, closeTokens, true);
+                if (attached)
+                {
+                    existing.IsVehicleDoor = IsVehicleDoor(existing.Transform, existing.Hinge);
+                    if (existing.IsVehicleDoor)
+                    {
+                        existing.VehicleBody = existing.VehicleBody ?? FindVehicleBody(existing.Transform);
+                        existing.AllowVehiclePlayMaker = true;
+                        existing.SkipHingeSync = true;
+                    }
+                    UpdateRotationSyncPolicy(existing);
+                    EnsureScrapeState(existing);
+                    _sorbetBindingsReady = false;
+
+                    if (_settings.VerboseLogging.Value)
+                    {
+                        DebugLog.Verbose("DoorSync: bus FSM registered (existing) fsm=" + fsmName + " path=" + debugPath);
+                    }
+                    return true;
+                }
+
+                return false;
+            }
+
+            string key = debugPath + "|pm";
+            uint id = HashPath(key);
+            if (_doorLookup.ContainsKey(id))
+            {
+                string originalKey = key;
+                int suffix = 1;
+                while (_doorLookup.ContainsKey(id) && suffix < 10)
+                {
+                    key = originalKey + "|bus" + suffix;
+                    id = HashPath(key);
+                    suffix++;
+                }
+
+                if (_doorLookup.ContainsKey(id))
+                {
+                    return false;
+                }
+            }
+
+            Transform doorTransform = fsm.transform;
+            DoorEntry entry = new DoorEntry
+            {
+                Id = id,
+                Key = key,
+                DebugPath = debugPath,
+                Transform = doorTransform,
+                Rigidbody = doorTransform != null ? doorTransform.GetComponent<Rigidbody>() : null,
+                Hinge = null,
+                BaseLocalRotation = doorTransform != null ? doorTransform.localRotation : Quaternion.identity,
+                LastSentRotation = doorTransform != null ? doorTransform.localRotation : Quaternion.identity,
+                LastAppliedRotation = doorTransform != null ? doorTransform.localRotation : Quaternion.identity,
+                InteractionKind = InteractionKind.Tap
+            };
+
+            entry.IsVehicleDoor = IsVehicleDoor(doorTransform, null);
+            entry.VehicleBody = entry.IsVehicleDoor ? FindVehicleBody(doorTransform) : null;
+            if (entry.IsVehicleDoor)
+            {
+                entry.AllowVehiclePlayMaker = true;
+                entry.SkipHingeSync = true;
+            }
+
+            bool playMaker = AttachPlayMakerEventOnly(fsm, entry, fsmName, openTokens, closeTokens, true);
+            if (!playMaker)
+            {
+                return false;
+            }
+
+            entry.HasPlayMaker = true;
+            UpdateRotationSyncPolicy(entry);
+            EnsureScrapeState(entry);
+            _doors.Add(entry);
+            _doorLookup.Add(id, entry);
+            _sorbetBindingsReady = false;
+
+            if (_settings.VerboseLogging.Value)
+            {
+                DebugLog.Verbose("DoorSync: bus FSM registered id=" + id + " fsm=" + fsmName + " path=" + debugPath);
+            }
+
+            return true;
+        }
+
         public void UpdateScene(int levelIndex, string levelName, bool allowScan)
         {
             if (!Enabled)
@@ -2108,6 +2255,11 @@ namespace MyWinterCarMpMod.Sync
 
         private bool AttachPlayMakerEventOnly(PlayMakerFSM fsm, DoorEntry entry, string doorName, string[] openEventTokens, string[] closeEventTokens)
         {
+            return AttachPlayMakerEventOnly(fsm, entry, doorName, openEventTokens, closeEventTokens, false);
+        }
+
+        private bool AttachPlayMakerEventOnly(PlayMakerFSM fsm, DoorEntry entry, string doorName, string[] openEventTokens, string[] closeEventTokens, bool allowAnyEventOverride)
+        {
             if (entry == null || fsm == null || fsm.Fsm == null)
             {
                 return false;
@@ -2127,7 +2279,32 @@ namespace MyWinterCarMpMod.Sync
 
             if (string.IsNullOrEmpty(openEventName) && string.IsNullOrEmpty(closeEventName))
             {
-                return false;
+                if (!allowAnyEventOverride)
+                {
+                    return false;
+                }
+
+                // For special cases (e.g. BUS route FSMs), we still want to hook all events even if we don't
+                // recognize open/close by tokens. Use a stable fallback if possible.
+                FsmEvent[] events = fsm.Fsm.Events;
+                if (events != null)
+                {
+                    for (int i = 0; i < events.Length; i++)
+                    {
+                        FsmEvent ev = events[i];
+                        if (ev != null && !string.IsNullOrEmpty(ev.Name))
+                        {
+                            openEventName = ev.Name;
+                            break;
+                        }
+                    }
+                }
+                if (string.IsNullOrEmpty(openEventName))
+                {
+                    return false;
+                }
+
+                closeEventName = openEventName;
             }
 
             if (string.IsNullOrEmpty(openEventName))
@@ -2140,7 +2317,8 @@ namespace MyWinterCarMpMod.Sync
                 closeEventName = openEventName;
             }
 
-            bool allowAnyEvent = entry.InteractionKind == InteractionKind.Tap && IsSorbetDoor(entry.DebugPath, entry.Transform);
+            bool allowAnyEvent = allowAnyEventOverride ||
+                (entry.InteractionKind == InteractionKind.Tap && IsSorbetDoor(entry.DebugPath, entry.Transform));
 
             string mpOpenEventName = "MWC_MP_OPEN";
             string mpCloseEventName = "MWC_MP_CLOSE";
@@ -2542,6 +2720,18 @@ namespace MyWinterCarMpMod.Sync
             if (now < entry.SuppressPlayMakerUntilTime)
             {
                 return;
+            }
+
+            // Bus FSMs are host authoritative; clients should not rebroadcast autonomous bus FSM transitions.
+            // The host will broadcast Route/Door + Route/Start events and the client will apply them.
+            if (_settings != null && _settings.Mode.Value == Mode.Client && entry.EventOnly && IsBusPath(entry.DebugPath))
+            {
+                string fsmName = GetFsmName(entry.Fsm);
+                if (string.Equals(fsmName, "Door", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(fsmName, "Start", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
             }
 
             bool isSorbet = IsSorbetDoor(entry.DebugPath, entry.Transform);

@@ -50,6 +50,7 @@ namespace MyWinterCarMpMod.Net
         private uint _scrapeSequence;
         private uint _dashboardSequence;
         private uint _pickupSequence;
+        private uint _pickupEventSequence;
         private string _status = "Client idle";
         private readonly PlayerLocator _playerLocator = new PlayerLocator();
         private readonly System.Collections.Generic.List<DoorStateData> _doorSendBuffer = new System.Collections.Generic.List<DoorStateData>(32);
@@ -58,6 +59,7 @@ namespace MyWinterCarMpMod.Net
         private readonly System.Collections.Generic.List<VehicleSeatData> _seatSendBuffer = new System.Collections.Generic.List<VehicleSeatData>(8);
         private readonly System.Collections.Generic.List<VehicleControlData> _vehicleControlSendBuffer = new System.Collections.Generic.List<VehicleControlData>(16);
         private readonly System.Collections.Generic.List<PickupStateData> _pickupSendBuffer = new System.Collections.Generic.List<PickupStateData>(32);
+        private readonly System.Collections.Generic.List<PickupEventData> _pickupEventSendBuffer = new System.Collections.Generic.List<PickupEventData>(8);
         private readonly System.Collections.Generic.List<DoorEventData> _doorEventSendBuffer = new System.Collections.Generic.List<DoorEventData>(16);
         private readonly System.Collections.Generic.List<ScrapeStateData> _scrapeSendBuffer = new System.Collections.Generic.List<ScrapeStateData>(16);
         private readonly System.Collections.Generic.List<OwnershipRequestData> _ownershipRequestBuffer = new System.Collections.Generic.List<OwnershipRequestData>(16);
@@ -226,6 +228,7 @@ namespace MyWinterCarMpMod.Net
                         SendVehicleControls(now);
                         SendVehicleStates(now);
                         SendPickupStates(now);
+                        SendPickupEvents(now);
                         SendOwnershipRequests();
                     }
                 }
@@ -545,6 +548,12 @@ namespace MyWinterCarMpMod.Net
                     if (_pickupSync != null)
                     {
                         _pickupSync.ApplyRemote(message.PickupState, OwnerKind.Client, false);
+                    }
+                    break;
+                case MessageType.PickupEvent:
+                    if (_pickupSync != null && _settings.PickupSyncEnabled.Value)
+                    {
+                        _pickupSync.ApplyRemoteEvent(message.PickupEvent, OwnerKind.Client);
                     }
                     break;
                 case MessageType.OwnershipUpdate:
@@ -949,6 +958,34 @@ namespace MyWinterCarMpMod.Net
             }
         }
 
+        private void SendPickupEvents(float now)
+        {
+            if (_pickupSync == null || !_pickupSync.Enabled)
+            {
+                return;
+            }
+
+            long unixTimeMs = GetUnixTimeMs();
+            int count = _pickupSync.CollectEvents(unixTimeMs, now, _pickupEventSendBuffer, OwnerKind.Client);
+            for (int i = 0; i < count; i++)
+            {
+                PickupEventData ev = _pickupEventSendBuffer[i];
+                _pickupEventSequence++;
+                ev.SessionId = _sessionId;
+                ev.Sequence = _pickupEventSequence;
+                _pickupEventSendBuffer[i] = ev;
+                byte[] payload = Protocol.BuildPickupEvent(ev);
+                if (_transport.Kind == TransportKind.SteamP2P)
+                {
+                    _transport.SendTo(_settings.SpectatorHostSteamId.Value, payload, true);
+                }
+                else
+                {
+                    _transport.Send(payload, true);
+                }
+            }
+        }
+
         private void SendOwnershipRequests()
         {
             float now = Time.realtimeSinceStartup;
@@ -1236,6 +1273,7 @@ namespace MyWinterCarMpMod.Net
             _scrapeSequence = 0;
             _dashboardSequence = 0;
             _pickupSequence = 0;
+            _pickupEventSequence = 0;
             _serverSendHz = 0;
             _progressMarker = string.Empty;
             _pendingLevelIndex = int.MinValue;

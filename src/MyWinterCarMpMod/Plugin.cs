@@ -14,7 +14,7 @@ using UnityEngine;
 
 namespace MyWinterCarMpMod
 {
-    [BepInPlugin("com.tudor.mywintercarmpmod", "My Winter Car MP Mod", "0.1.5")]
+    [BepInPlugin("com.tudor.mywintercarmpmod", "My Winter Car MP Mod", "0.1.7")]
     public sealed class Plugin : BaseUnityPlugin
     {
         internal static bool AllowMultipleInstances;
@@ -31,6 +31,8 @@ namespace MyWinterCarMpMod
         private TimeOfDaySync _timeSync;
         private NpcSync _npcSync;
         private WeatherScanner _weatherScanner;
+        private RadioScanner _radioScanner;
+        private BusSync _busSync;
         private ITransport _transport;
         private LanDiscovery _lanDiscovery;
         private Vector2 _lanScroll;
@@ -86,6 +88,8 @@ namespace MyWinterCarMpMod
             _timeSync = new TimeOfDaySync(_settings);
             _npcSync = new NpcSync(_settings);
             _weatherScanner = new WeatherScanner(_settings);
+            _radioScanner = new RadioScanner(_settings);
+            _busSync = new BusSync(_settings, _doorSync);
             _devFreecam = new DevFreecam();
             _overlayVisible = _settings.OverlayEnabled.Value;
             _buildId = Application.version + "|" + Application.unityVersion;
@@ -131,6 +135,13 @@ namespace MyWinterCarMpMod
                 _doorSync.Update(Time.realtimeSinceStartup);
             }
 
+            if (_busSync != null && _levelSync != null)
+            {
+                bool allowScan = !IsMainMenuScene();
+                _busSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
+                _busSync.Update(Time.realtimeSinceStartup);
+            }
+
             if (_vehicleSync != null && _levelSync != null)
             {
                 bool allowScan = !IsMainMenuScene();
@@ -163,6 +174,13 @@ namespace MyWinterCarMpMod
                 bool allowScan = !IsMainMenuScene();
                 _weatherScanner.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
                 _weatherScanner.Update(Time.realtimeSinceStartup);
+            }
+
+            if (_radioScanner != null && _levelSync != null)
+            {
+                bool allowScan = !IsMainMenuScene();
+                _radioScanner.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
+                _radioScanner.Update(Time.realtimeSinceStartup);
             }
 
             if (_settings.VerboseLogging.Value && _levelSync != null)

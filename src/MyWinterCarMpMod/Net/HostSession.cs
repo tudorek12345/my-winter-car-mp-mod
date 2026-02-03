@@ -27,6 +27,7 @@ namespace MyWinterCarMpMod.Net
         private readonly System.Collections.Generic.List<VehicleSeatData> _seatSendBuffer = new System.Collections.Generic.List<VehicleSeatData>(8);
         private readonly PickupSync _pickupSync;
         private readonly System.Collections.Generic.List<PickupStateData> _pickupSendBuffer = new System.Collections.Generic.List<PickupStateData>(32);
+        private readonly System.Collections.Generic.List<PickupEventData> _pickupEventSendBuffer = new System.Collections.Generic.List<PickupEventData>(8);
         private readonly System.Collections.Generic.List<NpcStateData> _npcSendBuffer = new System.Collections.Generic.List<NpcStateData>(32);
         private readonly System.Collections.Generic.List<DoorEventData> _doorEventSendBuffer = new System.Collections.Generic.List<DoorEventData>(16);
         private readonly System.Collections.Generic.List<ScrapeStateData> _scrapeSendBuffer = new System.Collections.Generic.List<ScrapeStateData>(16);
@@ -57,6 +58,7 @@ namespace MyWinterCarMpMod.Net
         private uint _scrapeSequence;
         private uint _dashboardSequence;
         private uint _pickupSequence;
+        private uint _pickupEventSequence;
         private uint _npcSequence;
         private PlayerStateData _latestClientState;
         private bool _hasClientState;
@@ -168,6 +170,7 @@ namespace MyWinterCarMpMod.Net
             _scrapeSequence = 0;
             _dashboardSequence = 0;
             _pickupSequence = 0;
+            _pickupEventSequence = 0;
             _npcSequence = 0;
             _hasClientState = false;
             _clientSceneReady = false;
@@ -279,6 +282,7 @@ namespace MyWinterCarMpMod.Net
                     {
                         SendVehicleStates(now);
                         SendPickupStates(now);
+                        SendPickupEvents(now);
                         SendNpcStates(now);
                         SendOwnershipUpdates();
                     }
@@ -483,6 +487,12 @@ namespace MyWinterCarMpMod.Net
                         _pickupSync.ApplyRemote(message.PickupState, OwnerKind.Host, true);
                     }
                     break;
+                case MessageType.PickupEvent:
+                    if (_pickupSync != null && _settings.PickupSyncEnabled.Value)
+                    {
+                        _pickupSync.ApplyRemoteEvent(message.PickupEvent, OwnerKind.Host);
+                    }
+                    break;
                 case MessageType.OwnershipRequest:
                     HandleOwnershipRequest(message.OwnershipRequest);
                     break;
@@ -615,6 +625,7 @@ namespace MyWinterCarMpMod.Net
             _seatSequence = 0;
             _doorEventSequence = 0;
             _pickupSequence = 0;
+            _pickupEventSequence = 0;
             _awaitWorldStateAck = false;
             _worldStateAcked = false;
             _worldStateAttempts = 0;
@@ -1002,6 +1013,27 @@ namespace MyWinterCarMpMod.Net
                 state.Sequence = _pickupSequence;
                 byte[] payload = Protocol.BuildPickupState(state);
                 _transport.Send(payload, false);
+            }
+        }
+
+        private void SendPickupEvents(float now)
+        {
+            if (_pickupSync == null || !_pickupSync.Enabled)
+            {
+                return;
+            }
+
+            long unixTimeMs = GetUnixTimeMs();
+            int count = _pickupSync.CollectEvents(unixTimeMs, now, _pickupEventSendBuffer, OwnerKind.Host);
+            for (int i = 0; i < count; i++)
+            {
+                PickupEventData ev = _pickupEventSendBuffer[i];
+                _pickupEventSequence++;
+                ev.SessionId = _sessionId;
+                ev.Sequence = _pickupEventSequence;
+                _pickupEventSendBuffer[i] = ev;
+                byte[] payload = Protocol.BuildPickupEvent(ev);
+                _transport.Send(payload, true);
             }
         }
 

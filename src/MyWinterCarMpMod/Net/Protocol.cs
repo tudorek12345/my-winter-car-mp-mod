@@ -31,7 +31,8 @@ namespace MyWinterCarMpMod.Net
         NpcState = 23,
         VehicleSeat = 24,
         ScrapeState = 25,
-        SorbetDashboardState = 26
+        SorbetDashboardState = 26,
+        PickupEvent = 27
     }
 
     public enum SyncObjectKind : byte
@@ -304,6 +305,15 @@ namespace MyWinterCarMpMod.Net
         public byte Flags;
     }
 
+    public struct PickupEventData
+    {
+        public uint SessionId;
+        public uint Sequence;
+        public long UnixTimeMs;
+        public uint PickupId;
+        public byte Action;
+    }
+
     public struct OwnershipRequestData
     {
         public uint SessionId;
@@ -356,6 +366,7 @@ namespace MyWinterCarMpMod.Net
         public VehicleSeatData VehicleSeat;
         public NpcStateData NpcState;
         public PickupStateData PickupState;
+        public PickupEventData PickupEvent;
         public OwnershipRequestData OwnershipRequest;
         public OwnershipUpdateData OwnershipUpdate;
         public WorldStateData WorldState;
@@ -364,7 +375,7 @@ namespace MyWinterCarMpMod.Net
     public static class Protocol
     {
         public const uint Magic = 0x4D575331;
-        public const ushort Version = 13;
+        public const ushort Version = 14;
         private const int MaxStringBytes = 4096;
         private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
@@ -762,6 +773,21 @@ namespace MyWinterCarMpMod.Net
             }
         }
 
+        public static byte[] BuildPickupEvent(PickupEventData ev)
+        {
+            using (MemoryStream stream = new MemoryStream(32))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                WriteHeader(writer, MessageType.PickupEvent);
+                writer.Write(ev.SessionId);
+                writer.Write(ev.Sequence);
+                writer.Write(ev.UnixTimeMs);
+                writer.Write(ev.PickupId);
+                writer.Write(ev.Action);
+                return stream.ToArray();
+            }
+        }
+
         public static byte[] BuildOwnershipRequest(OwnershipRequestData request)
         {
             using (MemoryStream stream = new MemoryStream(24))
@@ -1138,6 +1164,16 @@ namespace MyWinterCarMpMod.Net
                                 Flags = reader.ReadByte()
                             };
                             break;
+                        case MessageType.PickupEvent:
+                            result.PickupEvent = new PickupEventData
+                            {
+                                SessionId = reader.ReadUInt32(),
+                                Sequence = reader.ReadUInt32(),
+                                UnixTimeMs = reader.ReadInt64(),
+                                PickupId = reader.ReadUInt32(),
+                                Action = reader.ReadByte()
+                            };
+                            break;
                         case MessageType.OwnershipRequest:
                             result.OwnershipRequest = new OwnershipRequestData
                             {
@@ -1228,6 +1264,9 @@ namespace MyWinterCarMpMod.Net
                             break;
                         case MessageType.PickupState:
                             result.SessionId = result.PickupState.SessionId;
+                            break;
+                        case MessageType.PickupEvent:
+                            result.SessionId = result.PickupEvent.SessionId;
                             break;
                         case MessageType.OwnershipRequest:
                             result.SessionId = result.OwnershipRequest.SessionId;

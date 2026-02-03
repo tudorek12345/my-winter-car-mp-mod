@@ -12,6 +12,8 @@ namespace MyWinterCarMpMod.Sync
     {
         private const float HoldPollInterval = 0.12f;
         private const float RequestCooldownSeconds = 0.5f;
+        private const float DestroyRepeatSeconds = 0.25f;
+        private const byte PickupEventDestroy = 1;
         private const byte FlagHeld = 1 << 0;
         private const byte FlagNoGravity = 1 << 1;
         private const byte FlagKinematic = 1 << 2;
@@ -34,6 +36,7 @@ namespace MyWinterCarMpMod.Sync
         private readonly Settings _settings;
         private readonly List<PickupEntry> _pickups = new List<PickupEntry>();
         private readonly Dictionary<uint, PickupEntry> _pickupLookup = new Dictionary<uint, PickupEntry>();
+        private readonly List<PickupEventData> _eventQueue = new List<PickupEventData>(8);
         private readonly PlayerLocator _playerLocator = new PlayerLocator();
         private int _lastSceneIndex = int.MinValue;
         private string _lastSceneName = string.Empty;
@@ -81,6 +84,12 @@ namespace MyWinterCarMpMod.Sync
         public void Update(float now)
         {
             if (!Enabled || _pickups.Count == 0)
+            {
+                return;
+            }
+
+            PruneDestroyed();
+            if (_pickups.Count == 0)
             {
                 return;
             }
@@ -220,6 +229,49 @@ namespace MyWinterCarMpMod.Sync
             }
 
             ApplyFlags(entry, state.Flags);
+        }
+
+        public int CollectEvents(long unixTimeMs, float now, List<PickupEventData> buffer, OwnerKind localOwner)
+        {
+            buffer.Clear();
+            if (!Enabled || _eventQueue.Count == 0)
+            {
+                return 0;
+            }
+
+            for (int i = 0; i < _eventQueue.Count; i++)
+            {
+                PickupEventData ev = _eventQueue[i];
+                ev.UnixTimeMs = unixTimeMs;
+                buffer.Add(ev);
+            }
+
+            _eventQueue.Clear();
+            return buffer.Count;
+        }
+
+        public void ApplyRemoteEvent(PickupEventData ev, OwnerKind localOwner)
+        {
+            if (!Enabled)
+            {
+                return;
+            }
+
+            PickupEntry entry;
+            if (!_pickupLookup.TryGetValue(ev.PickupId, out entry))
+            {
+                return;
+            }
+
+            if (ev.Action == PickupEventDestroy)
+            {
+                GameObject obj = entry.Transform != null ? entry.Transform.gameObject : null;
+                RemoveEntry(entry);
+                if (obj != null)
+                {
+                    UnityEngine.Object.Destroy(obj);
+                }
+            }
         }
 
         public int CollectOwnershipRequests(OwnerKind localOwner, List<OwnershipRequestData> buffer)
@@ -436,6 +488,7 @@ namespace MyWinterCarMpMod.Sync
         {
             _pickups.Clear();
             _pickupLookup.Clear();
+            _eventQueue.Clear();
             _loggedNoPickups = false;
         }
 
@@ -557,7 +610,7 @@ namespace MyWinterCarMpMod.Sync
             _pickupLookup.Add(id, entry);
         }
 
-        private static void AttachPlayMaker(GameObject root, PickupEntry entry)
+        private void AttachPlayMaker(GameObject root, PickupEntry entry)
         {
             if (root == null || entry == null)
             {
@@ -578,13 +631,35 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
-                FsmBool heldBool = PlayMakerBridge.FindBoolByTokens(fsm, HeldBoolTokens);
-                if (heldBool != null)
+                if (entry.HeldBool == null)
                 {
-                    entry.Fsm = fsm;
-                    entry.HeldBool = heldBool;
-                    entry.IsHeld = heldBool.Value;
-                    return;
+                    FsmBool heldBool = PlayMakerBridge.FindBoolByTokens(fsm, HeldBoolTokens);
+                    if (heldBool != null)
+                    {
+                        entry.Fsm = fsm;
+                        entry.HeldBool = heldBool;
+                        entry.IsHeld = heldBool.Value;
+                    }
+                }
+
+                if (!entry.DestroyHookAttached && entry.UseFsm == null && IsUseFsm(fsm))
+                {
+                    entry.UseFsm = fsm;
+                    entry.DestroyHookAttached = true;
+
+                    FsmState[] states = fsm.Fsm.States;
+                    if (states != null)
+                    {
+                        for (int s = 0; s < states.Length; s++)
+                        {
+                            FsmState state = states[s];
+                            if (state == null)
+                            {
+                                continue;
+                            }
+                            PlayMakerBridge.PrependAction(state, new PickupDestroyPlayMakerAction(this, entry.Id));
+                        }
+                    }
                 }
 
                 if (entry.Fsm == null)
@@ -595,6 +670,87 @@ namespace MyWinterCarMpMod.Sync
                     {
                         entry.Fsm = fsm;
                     }
+                }
+            }
+        }
+
+        private static bool IsUseFsm(PlayMakerFSM fsm)
+        {
+            if (fsm == null || fsm.Fsm == null)
+            {
+                return false;
+            }
+
+            string name = fsm.Fsm.Name;
+            if (string.IsNullOrEmpty(name))
+            {
+                name = fsm.FsmName;
+            }
+            if (string.IsNullOrEmpty(name))
+            {
+                return false;
+            }
+
+            return string.Equals(name, "Use", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void NotifyLocalDestroy(uint pickupId)
+        {
+            PickupEntry entry;
+            if (!_pickupLookup.TryGetValue(pickupId, out entry))
+            {
+                return;
+            }
+
+            float now = Time.realtimeSinceStartup;
+            if (now - entry.LastDestroyNotifyTime < DestroyRepeatSeconds)
+            {
+                return;
+            }
+            entry.LastDestroyNotifyTime = now;
+
+            _eventQueue.Add(new PickupEventData
+            {
+                PickupId = pickupId,
+                Action = PickupEventDestroy
+            });
+
+            if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                DebugLog.Verbose("PickupSync: queued destroy event id=" + pickupId + " path=" + entry.DebugPath);
+            }
+        }
+
+        private void PruneDestroyed()
+        {
+            for (int i = _pickups.Count - 1; i >= 0; i--)
+            {
+                PickupEntry entry = _pickups[i];
+                if (entry == null || entry.Transform == null)
+                {
+                    if (entry != null)
+                    {
+                        _pickupLookup.Remove(entry.Id);
+                    }
+                    _pickups.RemoveAt(i);
+                }
+            }
+        }
+
+        private void RemoveEntry(PickupEntry entry)
+        {
+            if (entry == null)
+            {
+                return;
+            }
+
+            _pickupLookup.Remove(entry.Id);
+            for (int i = _pickups.Count - 1; i >= 0; i--)
+            {
+                if (_pickups[i] == entry)
+                {
+                    _pickups.RemoveAt(i);
+                    break;
                 }
             }
         }
@@ -758,6 +914,57 @@ namespace MyWinterCarMpMod.Sync
             }
         }
 
+        private sealed class PickupDestroyPlayMakerAction : FsmStateAction
+        {
+            private readonly PickupSync _owner;
+            private readonly uint _pickupId;
+
+            public PickupDestroyPlayMakerAction(PickupSync owner, uint pickupId)
+            {
+                _owner = owner;
+                _pickupId = pickupId;
+            }
+
+            public override void OnEnter()
+            {
+                Finish();
+
+                if (State == null || State.Fsm == null || State.Fsm.LastTransition == null)
+                {
+                    return;
+                }
+
+                string trigger = State.Fsm.LastTransition.EventName;
+                if (string.IsNullOrEmpty(trigger))
+                {
+                    return;
+                }
+
+                if (string.Equals(trigger, "FINISHED", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(trigger, "LOOP", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(trigger, "GLOBALEVENT", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                if (trigger.StartsWith("MWC_MP", StringComparison.OrdinalIgnoreCase) ||
+                    trigger.StartsWith("MP_", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                if (trigger.IndexOf("destroy", StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    return;
+                }
+
+                if (_owner != null)
+                {
+                    _owner.NotifyLocalDestroy(_pickupId);
+                }
+            }
+        }
+
         private sealed class PickupEntry
         {
             public uint Id;
@@ -766,10 +973,13 @@ namespace MyWinterCarMpMod.Sync
             public Transform Transform;
             public Rigidbody Body;
             public PlayMakerFSM Fsm;
+            public PlayMakerFSM UseFsm;
+            public bool DestroyHookAttached;
             public FsmBool HeldBool;
             public bool IsHeld;
             public bool LastSentHeld;
             public bool HeldStateDirty;
+            public float LastDestroyNotifyTime;
             public float LastOwnershipRequestTime;
             public uint LastRemoteSequence;
             public Vector3 LastSentPosition;

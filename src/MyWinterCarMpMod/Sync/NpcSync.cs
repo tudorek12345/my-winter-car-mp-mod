@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using HutongGames.PlayMaker;
 using MyWinterCarMpMod.Config;
 using MyWinterCarMpMod.Net;
 using MyWinterCarMpMod.Util;
@@ -12,6 +13,7 @@ namespace MyWinterCarMpMod.Sync
         private const byte FlagVehicle = 1 << 0;
         private const float RemoteLerpSpeed = 8f;
         private const float RemoteSnapDistance = 3f;
+        private const float PeriodicRescanSeconds = 8f;
 
         private readonly Settings _settings;
         private readonly List<NpcEntry> _npcs = new List<NpcEntry>();
@@ -77,19 +79,24 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
-            if (_npcs.Count > 0)
+            // Initial scene load: retry full scan a few times until we find something.
+            if (_npcs.Count == 0)
             {
+                if (_rescanAttempts >= 5)
+                {
+                    return;
+                }
+
+                _rescanAttempts++;
+                _nextRescanTime = now + 5f + (_rescanAttempts * 2f);
+                ScanNpcs();
                 return;
             }
 
-            if (_rescanAttempts >= 5)
-            {
-                return;
-            }
-
-            _rescanAttempts++;
-            _nextRescanTime = now + 5f + (_rescanAttempts * 2f);
-            ScanNpcs();
+            // After we have *any* NPCs, keep doing additive scans to pick up traffic/road vehicles
+            // that are enabled later (e.g. when driving to the highway).
+            _nextRescanTime = now + PeriodicRescanSeconds;
+            ScanNpcsAdditive();
         }
 
         public void FixedUpdate(float now, float deltaTime, OwnerKind localOwner)
@@ -221,6 +228,15 @@ namespace MyWinterCarMpMod.Sync
                     DebugLog.Warn("NpcSync missing npc id " + state.NpcId + ". Re-scan on next scene change.");
                     _loggedNoNpcs = true;
                 }
+
+                // NPC vehicles can spawn later (traffic, bus). Schedule a near-term additive scan so
+                // we pick them up quickly instead of waiting for the periodic timer.
+                float now = Time.realtimeSinceStartup;
+                float desired = now + 0.5f;
+                if (_nextRescanTime <= 0f || _nextRescanTime > desired)
+                {
+                    _nextRescanTime = desired;
+                }
                 return;
             }
 
@@ -229,6 +245,11 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
             entry.LastRemoteSequence = state.Sequence;
+
+            if (entry.IsVehicle)
+            {
+                DisableVehicleSimulationOnClient(entry);
+            }
 
             Vector3 pos = new Vector3(state.PosX, state.PosY, state.PosZ);
             Quaternion rot = new Quaternion(state.RotX, state.RotY, state.RotZ, state.RotW);
@@ -326,6 +347,59 @@ namespace MyWinterCarMpMod.Sync
             }
 
             DebugLog.Info("NpcSync: tracking " + _npcs.Count + " NPC(s) in " + _lastSceneName + ".");
+        }
+
+        private void ScanNpcsAdditive()
+        {
+            List<NpcCandidate> candidates = new List<NpcCandidate>();
+            CollectNpcAnimators(candidates);
+            CollectNpcVehicles(candidates);
+
+            if (candidates.Count == 0)
+            {
+                return;
+            }
+
+            candidates.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
+            Dictionary<string, int> keyCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            int added = 0;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                NpcCandidate candidate = candidates[i];
+                if (candidate == null || candidate.Root == null || string.IsNullOrEmpty(candidate.Key))
+                {
+                    continue;
+                }
+
+                int count;
+                if (!keyCounts.TryGetValue(candidate.Key, out count))
+                {
+                    count = 0;
+                }
+                count++;
+                keyCounts[candidate.Key] = count;
+                string uniqueKey = count == 1 ? candidate.Key : candidate.Key + "|dup" + count;
+
+                uint id = ObjectKeyBuilder.HashKey(uniqueKey);
+                if (_npcLookup.ContainsKey(id))
+                {
+                    continue;
+                }
+
+                AddNpc(candidate.Root, uniqueKey, candidate.DebugPath, candidate.IsVehicle);
+                added++;
+
+                if (_settings != null && _settings.VerboseLogging.Value)
+                {
+                    DebugLog.Verbose("NpcSync: added " + (candidate.IsVehicle ? "vehicle" : "npc") + " id=" + id +
+                        " key=" + uniqueKey + " path=" + candidate.DebugPath);
+                }
+            }
+
+            if (added > 0)
+            {
+                DebugLog.Info("NpcSync: added " + added + " NPC(s). Total=" + _npcs.Count + ".");
+            }
         }
 
         private void DumpNpcCandidates()
@@ -477,7 +551,8 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
-                if (!NameContains(name, filter))
+                string debugPath = ObjectKeyBuilder.BuildDebugPath(root);
+                if (!NameContains(name, filter) && !NameContains(debugPath, filter))
                 {
                     continue;
                 }
@@ -487,7 +562,6 @@ namespace MyWinterCarMpMod.Sync
                 {
                     continue;
                 }
-                string debugPath = ObjectKeyBuilder.BuildDebugPath(root);
                 candidates.Add(new NpcCandidate { Root = root, Key = key, DebugPath = debugPath, IsVehicle = true });
             }
         }
@@ -509,11 +583,6 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
-                if (!car.onAI)
-                {
-                    continue;
-                }
-
                 GameObject root = car.gameObject;
                 string name = root.name;
                 if (string.IsNullOrEmpty(name))
@@ -526,7 +595,8 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
 
-                if (!NameContains(name, filter))
+                string debugPath = ObjectKeyBuilder.BuildDebugPath(root);
+                if (!NameContains(name, filter) && !NameContains(debugPath, filter))
                 {
                     continue;
                 }
@@ -536,7 +606,6 @@ namespace MyWinterCarMpMod.Sync
                 {
                     continue;
                 }
-                string debugPath = ObjectKeyBuilder.BuildDebugPath(root);
                 candidates.Add(new NpcCandidate { Root = root, Key = key, DebugPath = debugPath, IsVehicle = true });
                 matched++;
             }
@@ -634,6 +703,11 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
+            if (entry.IsVehicle)
+            {
+                DisableVehicleSimulationOnClient(entry);
+            }
+
             Vector3 targetPos = entry.RemoteTargetPosition;
             Quaternion targetRot = entry.RemoteTargetRotation;
             float lerp = Mathf.Clamp01(deltaTime * RemoteLerpSpeed);
@@ -701,6 +775,112 @@ namespace MyWinterCarMpMod.Sync
             return seq > last;
         }
 
+        private void DisableVehicleSimulationOnClient(NpcEntry entry)
+        {
+            if (entry == null || entry.LocalSimulationDisabled || !entry.IsVehicle || entry.Transform == null)
+            {
+                return;
+            }
+
+            // Arcade traffic uses ArcadeCarNoPhysics + AI scripts that directly move transforms.
+            // Disable those on clients so host transforms win.
+            ArcadeCarNoPhysics arcade = entry.Transform.GetComponent<ArcadeCarNoPhysics>();
+            if (arcade == null)
+            {
+                arcade = entry.Transform.GetComponentInChildren<ArcadeCarNoPhysics>();
+            }
+            if (arcade != null && arcade.enabled)
+            {
+                arcade.enabled = false;
+            }
+
+            AICarController aiController = entry.Transform.GetComponent<AICarController>();
+            if (aiController == null)
+            {
+                aiController = entry.Transform.GetComponentInChildren<AICarController>();
+            }
+            if (aiController != null && aiController.enabled)
+            {
+                aiController.enabled = false;
+            }
+
+            AI_OmaReitti aiRoute = entry.Transform.GetComponent<AI_OmaReitti>();
+            if (aiRoute == null)
+            {
+                aiRoute = entry.Transform.GetComponentInChildren<AI_OmaReitti>();
+            }
+            if (aiRoute != null && aiRoute.enabled)
+            {
+                aiRoute.enabled = false;
+            }
+
+            CarDynamics dynamics = entry.Transform.GetComponent<CarDynamics>();
+            if (dynamics == null)
+            {
+                dynamics = entry.Transform.GetComponentInChildren<CarDynamics>();
+            }
+            if (dynamics != null)
+            {
+                try
+                {
+                    // Stops local controller inputs (AI or player) from driving the CarDynamics vehicle.
+                    dynamics.SetController("external");
+                }
+                catch (Exception)
+                {
+                }
+            }
+
+            int disabledFsms = 0;
+            PlayMakerFSM[] fsms = entry.Transform.GetComponentsInChildren<PlayMakerFSM>(true);
+            if (fsms != null)
+            {
+                for (int i = 0; i < fsms.Length; i++)
+                {
+                    PlayMakerFSM fsm = fsms[i];
+                    if (fsm == null || !fsm.enabled)
+                    {
+                        continue;
+                    }
+
+                    string fsmName = (fsm.Fsm != null && !string.IsNullOrEmpty(fsm.Fsm.Name))
+                        ? fsm.Fsm.Name
+                        : (fsm.FsmName ?? string.Empty);
+                    if (string.IsNullOrEmpty(fsmName))
+                    {
+                        continue;
+                    }
+
+                    // Keep bus Door/Start FSMs enabled so DoorSync can drive them from remote events.
+                    if (string.Equals(fsmName, "Door", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(fsmName, "Start", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (fsmName.IndexOf("Throttle", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        fsmName.IndexOf("Navigation", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        fsmName.IndexOf("Direction", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        fsm.enabled = false;
+                        disabledFsms++;
+                    }
+                }
+            }
+
+            entry.LocalSimulationDisabled = true;
+
+            if (_settings != null && _settings.VerboseLogging.Value)
+            {
+                DebugLog.Verbose("NpcSync: disabled local vehicle AI for " + entry.DebugPath +
+                    " arcade=" + (arcade != null) +
+                    " aiController=" + (aiController != null) +
+                    " aiRoute=" + (aiRoute != null) +
+                    " carDynamics=" + (dynamics != null) +
+                    " disabledFsms=" + disabledFsms);
+            }
+        }
+
         private sealed class NpcEntry
         {
             public uint Id;
@@ -709,6 +889,7 @@ namespace MyWinterCarMpMod.Sync
             public Transform Transform;
             public Rigidbody Body;
             public bool IsVehicle;
+            public bool LocalSimulationDisabled;
             public Vector3 LastSentPosition;
             public Quaternion LastSentRotation;
             public uint LastRemoteSequence;
