@@ -1325,6 +1325,10 @@ namespace MyWinterCarMpMod.Net
             {
                 _pickupSync.ResetOwnership();
             }
+            if (_npcSync != null)
+            {
+                _npcSync.Clear();
+            }
 
             if (allowReconnect && _settings.AutoReconnect.Value)
             {

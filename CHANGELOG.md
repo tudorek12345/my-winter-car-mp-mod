@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.8 - 2026-02-06
+- Sorbet dashboard/control payload extended with turn signals, ignition, starter, and interior light fields.
+- Sorbet control sampling now prefers explicit FSM variables over raw state index when available.
+- BUS nav payload fields are now included in realtime `NpcState` packets (`TargetSpeed`, `Route`, `Waypoint`, `WaypointStart`, `WaypointEnd`) instead of snapshot-only behavior.
+- Scrape replication stability pass:
+  - Added remote-baseline dedupe for incoming scrape states.
+  - Increased remote hold/suppress windows and blocked remote->local scrape echo loops.
+  - Added explicit scrape-finish `OFF`/inside-reset handling to reduce lingering scrape audio loops.
+- Reduced vehicle dashboard PlayMaker spam by filtering non-Sorbet/non-BUS vehicle event-only loops.
+- Suppressed Sorbet dashboard `EventOnly` door events (ON/OFF chatter) and rely on `SorbetDashboardState` as the authoritative channel for those controls.
+- NPC animator candidate matching now uses hierarchy path tokens in addition to object name.
+- Expanded default NPC name filters to include pub/shop actors (`teimo,shop,seller,cashier,customer,bartender`).
+- Updated config templates with the expanded NPC name filter defaults.
+
 ## 0.1.6 - 2026-01-26
 - Sorbet scrape state sync + initial snapshot on join to align frost state.
 - Sorbet dashboard/HVAC replication (heater temp/blower/direction/window heater/lights/hazard), including state-index apply.

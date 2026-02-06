@@ -28,6 +28,8 @@ namespace MyWinterCarMpMod.Sync
         private float _lastWalkTime;
         private Vector3 _lastTargetPos;
         private bool _hasLastTargetPos;
+        private float _smoothedWalkSpeed;
+        private LocomotionRig _locomotionRig;
 
         public RemotePlayerAvatar(Settings settings)
         {
@@ -91,6 +93,8 @@ namespace MyWinterCarMpMod.Sync
             _walkPhase = 0f;
             _lastWalkTime = 0f;
             _hasLastTargetPos = false;
+            _smoothedWalkSpeed = 0f;
+            _locomotionRig = null;
         }
 
         private void EnsureAvatar()
@@ -120,6 +124,7 @@ namespace MyWinterCarMpMod.Sync
             _modelRoot = modelRoot;
             _modelBaseLocalPosition = modelRoot.localPosition;
             _modelBaseLocalRotation = modelRoot.localRotation;
+            _locomotionRig = BuildLocomotionRig(modelRoot);
 
             _renderers = _avatar.GetComponentsInChildren<Renderer>(true);
             SetColor(new Color(0.2f, 0.8f, 1f, 0.9f));
@@ -485,6 +490,8 @@ namespace MyWinterCarMpMod.Sync
                 _walkRotation = Quaternion.identity;
                 _walkPhase = 0f;
                 _hasLastTargetPos = false;
+                _smoothedWalkSpeed = 0f;
+                ApplyLocomotionRig(0f);
                 ApplyModelOffsets();
                 return;
             }
@@ -497,33 +504,229 @@ namespace MyWinterCarMpMod.Sync
                 _hasLastTargetPos = true;
                 _walkOffset = Vector3.zero;
                 _walkRotation = Quaternion.identity;
+                _smoothedWalkSpeed = 0f;
+                ApplyLocomotionRig(0f);
                 ApplyModelOffsets();
                 return;
             }
 
             float delta = Mathf.Max(0.001f, now - _lastWalkTime);
-            float speed = Vector3.Distance(targetPos, _lastTargetPos) / delta;
+            Vector3 deltaPos = targetPos - _lastTargetPos;
+            float speed = deltaPos.magnitude / delta;
             _lastTargetPos = targetPos;
             _lastWalkTime = now;
 
-            if (speed > 0.15f)
+            _smoothedWalkSpeed = Mathf.Lerp(_smoothedWalkSpeed, speed, Clamp01(delta * 10f));
+            float stride = Mathf.Clamp01(_smoothedWalkSpeed / 2.8f);
+            bool moving = stride > 0.05f;
+
+            if (moving)
             {
-                float phaseSpeed = Mathf.Clamp(speed * 6f, 2f, 10f);
+                float phaseSpeed = Mathf.Lerp(3f, 8f, stride);
                 _walkPhase += delta * phaseSpeed;
-                float bob = Mathf.Sin(_walkPhase) * 0.05f;
-                float sway = Mathf.Sin(_walkPhase * 0.5f) * 0.04f;
-                float roll = Mathf.Sin(_walkPhase * 2f) * 6f;
+                float bob = Mathf.Sin(_walkPhase * 2f) * 0.03f * stride;
+                float sway = Mathf.Sin(_walkPhase) * 0.015f * stride;
+                float roll = Mathf.Sin(_walkPhase * 2f) * 2.5f * stride;
+                float yaw = 0f;
+                float sideLean = 0f;
+                if (deltaPos.sqrMagnitude > 0.0001f && _avatar != null)
+                {
+                    Vector3 localDir = _avatar.transform.InverseTransformDirection(deltaPos.normalized);
+                    yaw = Mathf.Clamp(localDir.x, -1f, 1f) * 2f * stride;
+                    sideLean = Mathf.Clamp(localDir.x, -1f, 1f) * 4f * stride;
+                }
                 _walkOffset = new Vector3(sway, bob, 0f);
-                _walkRotation = Quaternion.Euler(0f, 0f, roll);
+                _walkRotation = Quaternion.Euler(0f, yaw, roll + sideLean);
             }
             else
             {
-                _walkPhase = 0f;
+                _walkPhase = Mathf.Lerp(_walkPhase, 0f, Clamp01(delta * 6f));
                 _walkOffset = Vector3.zero;
                 _walkRotation = Quaternion.identity;
             }
 
+            ApplyLocomotionRig(stride);
             ApplyModelOffsets();
+        }
+
+        private void ApplyLocomotionRig(float stride)
+        {
+            if (_locomotionRig == null)
+            {
+                return;
+            }
+
+            float cycle = _walkPhase;
+            float legSwing = Mathf.Sin(cycle) * 30f * stride;
+            float legSwingOpp = Mathf.Sin(cycle + Mathf.PI) * 30f * stride;
+            float kneeLeft = Mathf.Max(0f, -Mathf.Sin(cycle)) * 32f * stride;
+            float kneeRight = Mathf.Max(0f, -Mathf.Sin(cycle + Mathf.PI)) * 32f * stride;
+            float footLeft = (-legSwing * 0.35f) + (kneeLeft * 0.35f);
+            float footRight = (-legSwingOpp * 0.35f) + (kneeRight * 0.35f);
+            float armLeft = -legSwing * 0.65f;
+            float armRight = -legSwingOpp * 0.65f;
+            float forearmLeft = Mathf.Max(0f, legSwing) * 10f * stride;
+            float forearmRight = Mathf.Max(0f, legSwingOpp) * 10f * stride;
+            float hipsRoll = Mathf.Sin(cycle * 2f) * 3f * stride;
+            float torsoPitch = Mathf.Sin(cycle + (Mathf.PI * 0.5f)) * 2f * stride;
+
+            ApplyBoneRotation(_locomotionRig.Hips, _locomotionRig.HipsBaseRot, 0f, 0f, hipsRoll);
+            ApplyBoneRotation(_locomotionRig.Spine, _locomotionRig.SpineBaseRot, torsoPitch, 0f, -hipsRoll * 0.5f);
+            ApplyBoneRotation(_locomotionRig.Chest, _locomotionRig.ChestBaseRot, torsoPitch * 0.6f, 0f, -hipsRoll * 0.3f);
+            ApplyBoneRotation(_locomotionRig.Head, _locomotionRig.HeadBaseRot, -torsoPitch * 0.3f, 0f, -hipsRoll * 0.2f);
+
+            ApplyBoneRotation(_locomotionRig.UpperLegL, _locomotionRig.UpperLegLBaseRot, legSwing, 0f, 0f);
+            ApplyBoneRotation(_locomotionRig.UpperLegR, _locomotionRig.UpperLegRBaseRot, legSwingOpp, 0f, 0f);
+            ApplyBoneRotation(_locomotionRig.LowerLegL, _locomotionRig.LowerLegLBaseRot, kneeLeft, 0f, 0f);
+            ApplyBoneRotation(_locomotionRig.LowerLegR, _locomotionRig.LowerLegRBaseRot, kneeRight, 0f, 0f);
+            ApplyBoneRotation(_locomotionRig.FootL, _locomotionRig.FootLBaseRot, footLeft, 0f, 0f);
+            ApplyBoneRotation(_locomotionRig.FootR, _locomotionRig.FootRBaseRot, footRight, 0f, 0f);
+
+            ApplyBoneRotation(_locomotionRig.UpperArmL, _locomotionRig.UpperArmLBaseRot, armLeft, 0f, 0f);
+            ApplyBoneRotation(_locomotionRig.UpperArmR, _locomotionRig.UpperArmRBaseRot, armRight, 0f, 0f);
+            ApplyBoneRotation(_locomotionRig.ForeArmL, _locomotionRig.ForeArmLBaseRot, forearmLeft, 0f, 0f);
+            ApplyBoneRotation(_locomotionRig.ForeArmR, _locomotionRig.ForeArmRBaseRot, forearmRight, 0f, 0f);
+        }
+
+        private static void ApplyBoneRotation(Transform bone, Quaternion baseRotation, float x, float y, float z)
+        {
+            if (bone == null)
+            {
+                return;
+            }
+
+            bone.localRotation = baseRotation * Quaternion.Euler(x, y, z);
+        }
+
+        private static LocomotionRig BuildLocomotionRig(Transform modelRoot)
+        {
+            if (modelRoot == null)
+            {
+                return null;
+            }
+
+            Transform[] bones = modelRoot.GetComponentsInChildren<Transform>(true);
+            if (bones == null || bones.Length == 0)
+            {
+                return null;
+            }
+
+            LocomotionRig rig = new LocomotionRig();
+            rig.Hips = FindBoneByTokens(bones, new[] { "hips", "pelvis", "hip" });
+            rig.Spine = FindBoneByTokens(bones, new[] { "spine", "spine1", "torso" });
+            rig.Chest = FindBoneByTokens(bones, new[] { "chest", "spine2", "upperchest" });
+            rig.Head = FindBoneByTokens(bones, new[] { "head", "neck" });
+
+            rig.UpperLegL = FindBoneBySideAndPartTokens(bones, new[] { "left", " l ", "_l", ".l", "l_" }, new[] { "thigh", "upleg", "upperleg", "leg" });
+            rig.UpperLegR = FindBoneBySideAndPartTokens(bones, new[] { "right", " r ", "_r", ".r", "r_" }, new[] { "thigh", "upleg", "upperleg", "leg" });
+            rig.LowerLegL = FindBoneBySideAndPartTokens(bones, new[] { "left", " l ", "_l", ".l", "l_" }, new[] { "calf", "shin", "knee", "lowerleg", "leg" });
+            rig.LowerLegR = FindBoneBySideAndPartTokens(bones, new[] { "right", " r ", "_r", ".r", "r_" }, new[] { "calf", "shin", "knee", "lowerleg", "leg" });
+            rig.FootL = FindBoneBySideAndPartTokens(bones, new[] { "left", " l ", "_l", ".l", "l_" }, new[] { "foot", "ankle" });
+            rig.FootR = FindBoneBySideAndPartTokens(bones, new[] { "right", " r ", "_r", ".r", "r_" }, new[] { "foot", "ankle" });
+            rig.UpperArmL = FindBoneBySideAndPartTokens(bones, new[] { "left", " l ", "_l", ".l", "l_" }, new[] { "upperarm", "arm", "shoulder" });
+            rig.UpperArmR = FindBoneBySideAndPartTokens(bones, new[] { "right", " r ", "_r", ".r", "r_" }, new[] { "upperarm", "arm", "shoulder" });
+            rig.ForeArmL = FindBoneBySideAndPartTokens(bones, new[] { "left", " l ", "_l", ".l", "l_" }, new[] { "forearm", "lowerarm", "elbow", "arm" });
+            rig.ForeArmR = FindBoneBySideAndPartTokens(bones, new[] { "right", " r ", "_r", ".r", "r_" }, new[] { "forearm", "lowerarm", "elbow", "arm" });
+
+            rig.HipsBaseRot = rig.Hips != null ? rig.Hips.localRotation : Quaternion.identity;
+            rig.SpineBaseRot = rig.Spine != null ? rig.Spine.localRotation : Quaternion.identity;
+            rig.ChestBaseRot = rig.Chest != null ? rig.Chest.localRotation : Quaternion.identity;
+            rig.HeadBaseRot = rig.Head != null ? rig.Head.localRotation : Quaternion.identity;
+            rig.UpperLegLBaseRot = rig.UpperLegL != null ? rig.UpperLegL.localRotation : Quaternion.identity;
+            rig.UpperLegRBaseRot = rig.UpperLegR != null ? rig.UpperLegR.localRotation : Quaternion.identity;
+            rig.LowerLegLBaseRot = rig.LowerLegL != null ? rig.LowerLegL.localRotation : Quaternion.identity;
+            rig.LowerLegRBaseRot = rig.LowerLegR != null ? rig.LowerLegR.localRotation : Quaternion.identity;
+            rig.FootLBaseRot = rig.FootL != null ? rig.FootL.localRotation : Quaternion.identity;
+            rig.FootRBaseRot = rig.FootR != null ? rig.FootR.localRotation : Quaternion.identity;
+            rig.UpperArmLBaseRot = rig.UpperArmL != null ? rig.UpperArmL.localRotation : Quaternion.identity;
+            rig.UpperArmRBaseRot = rig.UpperArmR != null ? rig.UpperArmR.localRotation : Quaternion.identity;
+            rig.ForeArmLBaseRot = rig.ForeArmL != null ? rig.ForeArmL.localRotation : Quaternion.identity;
+            rig.ForeArmRBaseRot = rig.ForeArmR != null ? rig.ForeArmR.localRotation : Quaternion.identity;
+
+            if (!rig.HasAnyLimb())
+            {
+                return null;
+            }
+
+            return rig;
+        }
+
+        private static Transform FindBoneByTokens(Transform[] bones, string[] tokens)
+        {
+            if (bones == null || tokens == null || tokens.Length == 0)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < bones.Length; i++)
+            {
+                Transform bone = bones[i];
+                if (bone == null || string.IsNullOrEmpty(bone.name))
+                {
+                    continue;
+                }
+
+                string lower = bone.name.ToLowerInvariant();
+                for (int t = 0; t < tokens.Length; t++)
+                {
+                    string token = tokens[t];
+                    if (string.IsNullOrEmpty(token))
+                    {
+                        continue;
+                    }
+
+                    if (lower.Contains(token))
+                    {
+                        return bone;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static Transform FindBoneBySideAndPartTokens(Transform[] bones, string[] sideTokens, string[] partTokens)
+        {
+            if (bones == null || sideTokens == null || sideTokens.Length == 0 || partTokens == null || partTokens.Length == 0)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < bones.Length; i++)
+            {
+                Transform bone = bones[i];
+                if (bone == null || string.IsNullOrEmpty(bone.name))
+                {
+                    continue;
+                }
+
+                string lower = bone.name.ToLowerInvariant();
+                bool sideMatch = false;
+                for (int s = 0; s < sideTokens.Length; s++)
+                {
+                    string token = sideTokens[s];
+                    if (!string.IsNullOrEmpty(token) && lower.Contains(token))
+                    {
+                        sideMatch = true;
+                        break;
+                    }
+                }
+                if (!sideMatch)
+                {
+                    continue;
+                }
+
+                for (int p = 0; p < partTokens.Length; p++)
+                {
+                    string token = partTokens[p];
+                    if (!string.IsNullOrEmpty(token) && lower.Contains(token))
+                    {
+                        return bone;
+                    }
+                }
+            }
+
+            return null;
         }
 
         private void ApplyModelOffsets()
@@ -535,6 +738,47 @@ namespace MyWinterCarMpMod.Sync
 
             _modelRoot.localPosition = _modelBaseLocalPosition + _seatOffset + _walkOffset;
             _modelRoot.localRotation = _modelBaseLocalRotation * _seatRotation * _walkRotation;
+        }
+
+        private sealed class LocomotionRig
+        {
+            public Transform Hips;
+            public Transform Spine;
+            public Transform Chest;
+            public Transform Head;
+            public Transform UpperLegL;
+            public Transform UpperLegR;
+            public Transform LowerLegL;
+            public Transform LowerLegR;
+            public Transform FootL;
+            public Transform FootR;
+            public Transform UpperArmL;
+            public Transform UpperArmR;
+            public Transform ForeArmL;
+            public Transform ForeArmR;
+
+            public Quaternion HipsBaseRot = Quaternion.identity;
+            public Quaternion SpineBaseRot = Quaternion.identity;
+            public Quaternion ChestBaseRot = Quaternion.identity;
+            public Quaternion HeadBaseRot = Quaternion.identity;
+            public Quaternion UpperLegLBaseRot = Quaternion.identity;
+            public Quaternion UpperLegRBaseRot = Quaternion.identity;
+            public Quaternion LowerLegLBaseRot = Quaternion.identity;
+            public Quaternion LowerLegRBaseRot = Quaternion.identity;
+            public Quaternion FootLBaseRot = Quaternion.identity;
+            public Quaternion FootRBaseRot = Quaternion.identity;
+            public Quaternion UpperArmLBaseRot = Quaternion.identity;
+            public Quaternion UpperArmRBaseRot = Quaternion.identity;
+            public Quaternion ForeArmLBaseRot = Quaternion.identity;
+            public Quaternion ForeArmRBaseRot = Quaternion.identity;
+
+            public bool HasAnyLimb()
+            {
+                return UpperLegL != null || UpperLegR != null ||
+                    LowerLegL != null || LowerLegR != null ||
+                    FootL != null || FootR != null ||
+                    UpperArmL != null || UpperArmR != null;
+            }
         }
     }
 }

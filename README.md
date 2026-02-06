@@ -2,28 +2,28 @@
 <img width="858" height="858" alt="mwc_logo_circle_transparent_large_trans" src="https://github.com/user-attachments/assets/d6e00873-dcd0-45fa-bb9c-e11620fa22c7" />
 
 
-## Current Status
-Host and client can connect in-game and both see each other using the MWCMP model avatar (static mesh, scaled and grounded). Interior room doors plus the cabin front/back entrances sync. Cabin sink/tap and fridge interactions sync. Time-of-day lighting sync is working. The Sorbet car is in active development: doors sync complete, driving/ownership is working, scrape + dashboard/HVAC sync is in place, and passenger seat snapping reduces in-car lag. NPC/traffic sync still needs tuning (name filters and late-spawn detection), and pickupable items are still WIP.
+
 
 OFFICIAL DISCORD
 https://discord.gg/GQeC5tCH2w
 
 ## Current Version [STATUS]
-0.1.6 - 2026-01-26
-MWCMP avatar bundle integrated with auto-grounding; scale/offset tuned (still configurable).
-Cabin sink/tap and fridge interactions sync.
-Sorbet vehicle sync is still WIP: doors sync for both players, driving/ownership working, dashboard/HVAC + scrape replication added.
-https://youtu.be/vUQ-D4gIdTY first quick demo ("showcase") 
-## Recent Progress
-- Swapped the blue capsule for the MWCMP model avatar (static mesh) with grounding and scale tuning.
-- Cabin door sync stabilized (room doors + front/back cabin entrances).
-- Sink/tap and fridge interactions now replicate.
-- Time-of-day lighting replication verified across host/client.
-- Sorbet scrape state replication + startup snapshot to align frost state on join.
-- Sorbet dashboard/HVAC state replication (heater temp/blower/direction/window heater/lights/hazard).
-- Passenger seat snapping (pos + rot) to reduce in-car lag for remote avatars.
-- NPC/traffic scanning upgraded with delayed rescans and candidate dumps for filter tuning.
-- Both Players can now drive the sorbet with some issues.
+0.1.8 - 2026-02-06
+
+Highlights:
+- Sorbet control sync extended to include turn signals, ignition, starter, and interior light in dashboard state payload.
+- BUS nav payload (target speed/route/waypoint/start/end) is now serialized in realtime `NpcState` packets, not only in world snapshots.
+- Scrape replication hardened with remote-baseline dedupe and remote-hold echo suppression to reduce scrape audio/state spam loops.
+- Scrape finish states now drive `OFF`/inside-reset handling to prevent lingering remote scrape audio loops.
+- Door PlayMaker spam reduced by filtering non-Sorbet/non-BUS vehicle event-only button loops and suppressing Sorbet dashboard EventOnly chatter (dashboard payload is authoritative).
+- NPC animator discovery improved by matching both object name and hierarchy path tokens.
+- Default NPC name filter expanded for pub/shop coverage (`nappo,pub,bar,npc,teimo,shop,seller,cashier,customer,bartender`).
+- Pickup sync remains staged: stable set first (beer, cigarettes, sausage), metadata-filter expansion optional.
+
+Known active WIP:
+- Pub/teimo dialogue/ticket/order interaction parity is not complete yet.
+- BUS route/ticket flow is partially synced and still under active tuning.
+- Some AI/traffic edge cases still need dedicated FSM event replication per actor/system.
 
 
 ## Requirements

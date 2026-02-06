@@ -204,6 +204,7 @@ namespace MyWinterCarMpMod.Net
         public long UnixTimeMs;
         public uint VehicleId;
         public byte Mask;
+        public byte AuxMask;
         public byte HeaterTempKind;
         public float HeaterTempValue;
         public byte HeaterBlowerKind;
@@ -214,8 +215,18 @@ namespace MyWinterCarMpMod.Net
         public float WindowHeaterValue;
         public byte LightModesKind;
         public float LightModesValue;
+        public byte WipersKind;
+        public float WipersValue;
         public byte HazardKind;
         public float HazardValue;
+        public byte TurnSignalsKind;
+        public float TurnSignalsValue;
+        public byte IgnitionKind;
+        public float IgnitionValue;
+        public byte StarterKind;
+        public float StarterValue;
+        public byte InteriorLightKind;
+        public float InteriorLightValue;
     }
 
     public struct VehicleStateData
@@ -287,6 +298,11 @@ namespace MyWinterCarMpMod.Net
         public float AngVelY;
         public float AngVelZ;
         public byte Flags;
+        public float BusTargetSpeed;
+        public int BusWaypoint;
+        public int BusRoute;
+        public int BusWaypointStart;
+        public int BusWaypointEnd;
     }
 
     public struct PickupStateData
@@ -375,7 +391,7 @@ namespace MyWinterCarMpMod.Net
     public static class Protocol
     {
         public const uint Magic = 0x4D575331;
-        public const ushort Version = 14;
+        public const ushort Version = 15;
         private const int MaxStringBytes = 4096;
         private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
 
@@ -609,7 +625,7 @@ namespace MyWinterCarMpMod.Net
 
         public static byte[] BuildSorbetDashboardState(SorbetDashboardStateData state)
         {
-            using (MemoryStream stream = new MemoryStream(96))
+            using (MemoryStream stream = new MemoryStream(128))
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 WriteHeader(writer, MessageType.SorbetDashboardState);
@@ -628,8 +644,19 @@ namespace MyWinterCarMpMod.Net
                 writer.Write(state.WindowHeaterValue);
                 writer.Write(state.LightModesKind);
                 writer.Write(state.LightModesValue);
+                writer.Write(state.WipersKind);
+                writer.Write(state.WipersValue);
                 writer.Write(state.HazardKind);
                 writer.Write(state.HazardValue);
+                writer.Write(state.AuxMask);
+                writer.Write(state.TurnSignalsKind);
+                writer.Write(state.TurnSignalsValue);
+                writer.Write(state.IgnitionKind);
+                writer.Write(state.IgnitionValue);
+                writer.Write(state.StarterKind);
+                writer.Write(state.StarterValue);
+                writer.Write(state.InteriorLightKind);
+                writer.Write(state.InteriorLightValue);
                 return stream.ToArray();
             }
         }
@@ -688,7 +715,7 @@ namespace MyWinterCarMpMod.Net
 
         public static byte[] BuildNpcState(NpcStateData state)
         {
-            using (MemoryStream stream = new MemoryStream(96))
+            using (MemoryStream stream = new MemoryStream(128))
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 WriteHeader(writer, MessageType.NpcState);
@@ -710,6 +737,11 @@ namespace MyWinterCarMpMod.Net
                 writer.Write(state.AngVelY);
                 writer.Write(state.AngVelZ);
                 writer.Write(state.Flags);
+                writer.Write(state.BusTargetSpeed);
+                writer.Write(state.BusWaypoint);
+                writer.Write(state.BusRoute);
+                writer.Write(state.BusWaypointStart);
+                writer.Write(state.BusWaypointEnd);
                 return stream.ToArray();
             }
         }
@@ -1051,7 +1083,7 @@ namespace MyWinterCarMpMod.Net
                             };
                             break;
                         case MessageType.SorbetDashboardState:
-                            result.SorbetDashboardState = new SorbetDashboardStateData
+                            SorbetDashboardStateData dashboard = new SorbetDashboardStateData
                             {
                                 SessionId = reader.ReadUInt32(),
                                 Sequence = reader.ReadUInt32(),
@@ -1067,10 +1099,42 @@ namespace MyWinterCarMpMod.Net
                                 WindowHeaterKind = reader.ReadByte(),
                                 WindowHeaterValue = reader.ReadSingle(),
                                 LightModesKind = reader.ReadByte(),
-                                LightModesValue = reader.ReadSingle(),
-                                HazardKind = reader.ReadByte(),
-                                HazardValue = reader.ReadSingle()
+                                LightModesValue = reader.ReadSingle()
                             };
+
+                            long remaining = reader.BaseStream.Length - reader.BaseStream.Position;
+                            if (remaining >= 10)
+                            {
+                                // Newer format includes wipers + hazard.
+                                dashboard.WipersKind = reader.ReadByte();
+                                dashboard.WipersValue = reader.ReadSingle();
+                                dashboard.HazardKind = reader.ReadByte();
+                                dashboard.HazardValue = reader.ReadSingle();
+                                remaining = reader.BaseStream.Length - reader.BaseStream.Position;
+                            }
+                            else if (remaining >= 5)
+                            {
+                                // Legacy format had hazard only.
+                                dashboard.HazardKind = reader.ReadByte();
+                                dashboard.HazardValue = reader.ReadSingle();
+                                remaining = reader.BaseStream.Length - reader.BaseStream.Position;
+                            }
+
+                            if (remaining >= 21)
+                            {
+                                // Extended format includes turn signals, ignition/starter and interior light.
+                                dashboard.AuxMask = reader.ReadByte();
+                                dashboard.TurnSignalsKind = reader.ReadByte();
+                                dashboard.TurnSignalsValue = reader.ReadSingle();
+                                dashboard.IgnitionKind = reader.ReadByte();
+                                dashboard.IgnitionValue = reader.ReadSingle();
+                                dashboard.StarterKind = reader.ReadByte();
+                                dashboard.StarterValue = reader.ReadSingle();
+                                dashboard.InteriorLightKind = reader.ReadByte();
+                                dashboard.InteriorLightValue = reader.ReadSingle();
+                            }
+
+                            result.SorbetDashboardState = dashboard;
                             break;
                         case MessageType.VehicleState:
                             result.VehicleState = new VehicleStateData
@@ -1125,7 +1189,7 @@ namespace MyWinterCarMpMod.Net
                             };
                             break;
                         case MessageType.NpcState:
-                            result.NpcState = new NpcStateData
+                            NpcStateData npcState = new NpcStateData
                             {
                                 SessionId = reader.ReadUInt32(),
                                 Sequence = reader.ReadUInt32(),
@@ -1144,8 +1208,25 @@ namespace MyWinterCarMpMod.Net
                                 AngVelX = reader.ReadSingle(),
                                 AngVelY = reader.ReadSingle(),
                                 AngVelZ = reader.ReadSingle(),
-                                Flags = reader.ReadByte()
+                                Flags = reader.ReadByte(),
+                                BusWaypoint = -1,
+                                BusRoute = -1,
+                                BusWaypointStart = -1,
+                                BusWaypointEnd = -1
                             };
+
+                            // Newer npc packets include BUS nav payload; accept both layouts.
+                            long npcRemaining = reader.BaseStream.Length - reader.BaseStream.Position;
+                            if (npcRemaining >= 20)
+                            {
+                                npcState.BusTargetSpeed = reader.ReadSingle();
+                                npcState.BusWaypoint = reader.ReadInt32();
+                                npcState.BusRoute = reader.ReadInt32();
+                                npcState.BusWaypointStart = reader.ReadInt32();
+                                npcState.BusWaypointEnd = reader.ReadInt32();
+                            }
+
+                            result.NpcState = npcState;
                             break;
                         case MessageType.PickupState:
                             result.PickupState = new PickupStateData
@@ -1529,6 +1610,11 @@ namespace MyWinterCarMpMod.Net
             writer.Write(state.AngVelY);
             writer.Write(state.AngVelZ);
             writer.Write(state.Flags);
+            writer.Write(state.BusTargetSpeed);
+            writer.Write(state.BusWaypoint);
+            writer.Write(state.BusRoute);
+            writer.Write(state.BusWaypointStart);
+            writer.Write(state.BusWaypointEnd);
         }
 
         private static void WritePickupState(BinaryWriter writer, PickupStateData state)
@@ -1630,7 +1716,12 @@ namespace MyWinterCarMpMod.Net
                 AngVelX = reader.ReadSingle(),
                 AngVelY = reader.ReadSingle(),
                 AngVelZ = reader.ReadSingle(),
-                Flags = reader.ReadByte()
+                Flags = reader.ReadByte(),
+                BusTargetSpeed = reader.ReadSingle(),
+                BusWaypoint = reader.ReadInt32(),
+                BusRoute = reader.ReadInt32(),
+                BusWaypointStart = reader.ReadInt32(),
+                BusWaypointEnd = reader.ReadInt32()
             };
         }
 

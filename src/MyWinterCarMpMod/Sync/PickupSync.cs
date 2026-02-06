@@ -32,6 +32,9 @@ namespace MyWinterCarMpMod.Sync
         {
             "drop", "release", "put"
         };
+        private static readonly string[] StableBeerTokens = new[] { "beer", "olut", "karhu" };
+        private static readonly string[] StableCigaretteTokens = new[] { "cigarette", "cigarettes", "cig", "cigs", "cigpacket", "cig_pack" };
+        private static readonly string[] StableFoodTokens = new[] { "sausage", "makkara" };
 
         private readonly Settings _settings;
         private readonly List<PickupEntry> _pickups = new List<PickupEntry>();
@@ -506,17 +509,38 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
-            string filter = _settings.GetPickupNameFilter();
-            bool hasFilter = !string.IsNullOrEmpty(filter);
-            if (hasFilter)
+            string metadataFilter = _settings.GetPickupNameFilter();
+            bool hasMetadataFilter = !string.IsNullOrEmpty(metadataFilter);
+            List<PickupCandidate> filtered = new List<PickupCandidate>(candidates.Count);
+            int stableCount = 0;
+            int expandedCount = 0;
+
+            for (int i = 0; i < candidates.Count; i++)
             {
-                for (int i = candidates.Count - 1; i >= 0; i--)
+                PickupCandidate candidate = candidates[i];
+                bool stable = IsStablePickupCandidate(candidate);
+                bool expanded = !stable && hasMetadataFilter && NameContains(candidate.Metadata, metadataFilter);
+                if (!stable && !expanded)
                 {
-                    if (!NameContains(candidates[i].Root.name, filter))
-                    {
-                        candidates.RemoveAt(i);
-                    }
+                    continue;
                 }
+
+                filtered.Add(candidate);
+                if (stable)
+                {
+                    stableCount++;
+                }
+                else
+                {
+                    expandedCount++;
+                }
+            }
+
+            candidates = filtered;
+            if (candidates.Count == 0)
+            {
+                DebugLog.Verbose("PickupSync: no stable pickupables matched in " + _lastSceneName + ".");
+                return;
             }
 
             candidates.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
@@ -535,7 +559,8 @@ namespace MyWinterCarMpMod.Sync
                 AddPickup(candidate.Root, uniqueKey, candidate.DebugPath);
             }
 
-            DebugLog.Info("PickupSync: tracking " + _pickups.Count + " pickup(s) in " + _lastSceneName + ".");
+            DebugLog.Info("PickupSync: tracking " + _pickups.Count + " pickup(s) in " + _lastSceneName +
+                " (stable=" + stableCount + ", expanded=" + expandedCount + ").");
         }
 
         private void CollectByTag(string tag, List<PickupCandidate> candidates)
@@ -573,8 +598,58 @@ namespace MyWinterCarMpMod.Sync
                     continue;
                 }
                 string debugPath = ObjectKeyBuilder.BuildDebugPath(obj);
-                candidates.Add(new PickupCandidate { Root = obj, Key = key, DebugPath = debugPath });
+                string metadata = BuildPickupMetadata(obj, key, debugPath);
+                candidates.Add(new PickupCandidate { Root = obj, Key = key, DebugPath = debugPath, Metadata = metadata });
             }
+        }
+
+        private static string BuildPickupMetadata(GameObject obj, string key, string debugPath)
+        {
+            if (obj == null)
+            {
+                return string.Empty;
+            }
+
+            string name = obj.name ?? string.Empty;
+            string tag = obj.tag ?? string.Empty;
+            return string.Concat(name, "|", tag, "|", key ?? string.Empty, "|", debugPath ?? string.Empty);
+        }
+
+        private static bool IsStablePickupCandidate(PickupCandidate candidate)
+        {
+            if (candidate == null)
+            {
+                return false;
+            }
+
+            string metadata = candidate.Metadata ?? string.Empty;
+            return ContainsAnyToken(metadata, StableBeerTokens) ||
+                ContainsAnyToken(metadata, StableCigaretteTokens) ||
+                ContainsAnyToken(metadata, StableFoodTokens);
+        }
+
+        private static bool ContainsAnyToken(string source, string[] tokens)
+        {
+            if (string.IsNullOrEmpty(source) || tokens == null || tokens.Length == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                string token = tokens[i];
+                if (string.IsNullOrEmpty(token))
+                {
+                    continue;
+                }
+
+                if (source.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void AddPickup(GameObject root, string key, string debugPath)
@@ -992,6 +1067,7 @@ namespace MyWinterCarMpMod.Sync
             public GameObject Root;
             public string Key;
             public string DebugPath;
+            public string Metadata;
         }
     }
 }

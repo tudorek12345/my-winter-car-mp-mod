@@ -145,7 +145,7 @@ namespace MyWinterCarMpMod.Config
             NpcSendHz = config.Bind("NpcSync", "SendHz", 6, "NPC state send rate in Hz (1-15).");
             NpcPositionThreshold = config.Bind("NpcSync", "PositionThreshold", 0.05f, "Minimum NPC position delta before sending (meters).");
             NpcRotationThreshold = config.Bind("NpcSync", "RotationThreshold", 2.0f, "Minimum NPC rotation delta before sending (degrees).");
-            NpcNameFilter = config.Bind("NpcSync", "NameFilter", "nappo,pub,bar,npc", "NPC name tokens to sync (comma-separated).");
+            NpcNameFilter = config.Bind("NpcSync", "NameFilter", "nappo,pub,bar,npc,teimo,shop,seller,cashier,customer,bartender", "NPC name tokens to sync (comma-separated).");
             NpcVehicleFilter = config.Bind("NpcSync", "VehicleFilter", "traffic,ai,bus,taxi,truck,van", "Traffic vehicle name tokens to sync (comma-separated).");
             NpcDisablePhysicsOnClient = config.Bind("NpcSync", "DisablePhysicsOnClient", true, "Force NPC rigidbodies kinematic on clients.");
             NpcAuthorityHostOnly = config.Bind("NpcSync", "HostAuthorityOnly", true, "Host simulates NPC/traffic; clients only receive transforms.");

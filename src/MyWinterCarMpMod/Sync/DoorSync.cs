@@ -56,6 +56,13 @@ namespace MyWinterCarMpMod.Sync
         private static readonly string[] ScrapeStateTokensLayer2 = new[] { "scrape 2", "scrape2" };
         private static readonly string[] ScrapeStateTokensGlass = new[] { "get this glass", "get glass", "glass" };
         private static readonly string[] ScrapeStateTokensAny = new[] { "scrape" };
+        private static readonly string[] BusPaymentEventTokens = new[] { "buy", "notpaid", "pay", "ticket", "money", "cash", "fare", "lippu", "maksu" };
+        private static readonly string[] BusClientRequestEventTokens = new[] { "stop", "bell", "halt", "nextstop", "pysa", "kello" };
+        private static readonly string[] VehicleContextPathTokens = new[]
+        {
+            "carparts", "traffic", "npc_cars", "taxijob", "gifu", "kekmet", "sorbet", "machtwagen",
+            "heppa", "fittan", "galaxyliner", "lamore", "menace", "polsa", "svoboda", "victro", "truck", "bus"
+        };
         private const float ScrapeFinishDistance = 0.02f;
 
         private readonly Settings _settings;
@@ -87,7 +94,7 @@ namespace MyWinterCarMpMod.Sync
         private float _nextRescanTime;
         private string _rescanReason = string.Empty;
         private bool _sorbetBindingsReady;
-        private readonly List<SorbetControlBinding> _sorbetControls = new List<SorbetControlBinding>(8);
+        private readonly List<SorbetControlBinding> _sorbetControls = new List<SorbetControlBinding>(12);
 
         public DoorSync(Settings settings)
         {
@@ -119,6 +126,52 @@ namespace MyWinterCarMpMod.Sync
 
             return debugPath.IndexOf("/BUS", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    debugPath.IndexOf("BUS#", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string BuildBusFsmKey(string debugPath, string fsmName)
+        {
+            // BUS is reparented at runtime (spawn points), so debug paths differ between instances.
+            // Normalize to a stable identifier so DoorEvent ids match host <-> client.
+            string stablePath = debugPath ?? string.Empty;
+            if (!string.IsNullOrEmpty(stablePath))
+            {
+                string[] parts = stablePath.Split('/');
+                int busIndex = -1;
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    string part = parts[i];
+                    if (!string.IsNullOrEmpty(part) && part.IndexOf("BUS", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        busIndex = i;
+                        break;
+                    }
+                }
+
+                if (busIndex >= 0)
+                {
+                    List<string> kept = new List<string>(parts.Length - busIndex);
+                    for (int i = busIndex; i < parts.Length; i++)
+                    {
+                        string part = parts[i];
+                        if (string.IsNullOrEmpty(part))
+                        {
+                            continue;
+                        }
+
+                        int suffix = part.LastIndexOf('#');
+                        if (suffix >= 0)
+                        {
+                            part = part.Substring(0, suffix);
+                        }
+
+                        kept.Add(part);
+                    }
+                    stablePath = string.Join("/", kept.ToArray());
+                }
+            }
+
+            string name = string.IsNullOrEmpty(fsmName) ? "FSM" : fsmName;
+            return "bus_fsm:" + name + ":" + stablePath + "|pm";
         }
 
         internal bool TryRegisterBusFsm(PlayMakerFSM fsm, string debugPath)
@@ -158,74 +211,43 @@ namespace MyWinterCarMpMod.Sync
                 closeTokens = new[] { "CLOSE", "STOP", "OFF" };
             }
 
-            DoorEntry existing = FindDoorByPath(debugPath);
-            if (existing != null)
-            {
-                // Force event-only + allow-any-event for bus FSMs (host authoritative).
-                existing.InteractionKind = InteractionKind.Tap;
-
-                bool attached = AttachPlayMakerEventOnly(fsm, existing, fsmName, openTokens, closeTokens, true);
-                if (attached)
-                {
-                    existing.IsVehicleDoor = IsVehicleDoor(existing.Transform, existing.Hinge);
-                    if (existing.IsVehicleDoor)
-                    {
-                        existing.VehicleBody = existing.VehicleBody ?? FindVehicleBody(existing.Transform);
-                        existing.AllowVehiclePlayMaker = true;
-                        existing.SkipHingeSync = true;
-                    }
-                    UpdateRotationSyncPolicy(existing);
-                    EnsureScrapeState(existing);
-                    _sorbetBindingsReady = false;
-
-                    if (_settings.VerboseLogging.Value)
-                    {
-                        DebugLog.Verbose("DoorSync: bus FSM registered (existing) fsm=" + fsmName + " path=" + debugPath);
-                    }
-                    return true;
-                }
-
-                return false;
-            }
-
-            string key = debugPath + "|pm";
-            uint id = HashPath(key);
-            if (_doorLookup.ContainsKey(id))
-            {
-                string originalKey = key;
-                int suffix = 1;
-                while (_doorLookup.ContainsKey(id) && suffix < 10)
-                {
-                    key = originalKey + "|bus" + suffix;
-                    id = HashPath(key);
-                    suffix++;
-                }
-
-                if (_doorLookup.ContainsKey(id))
-                {
-                    return false;
-                }
-            }
-
+            // BUS is reparented at runtime which changes debugPath; don't key bus FSMs by raw path.
             Transform doorTransform = fsm.transform;
-            DoorEntry entry = new DoorEntry
-            {
-                Id = id,
-                Key = key,
-                DebugPath = debugPath,
-                Transform = doorTransform,
-                Rigidbody = doorTransform != null ? doorTransform.GetComponent<Rigidbody>() : null,
-                Hinge = null,
-                BaseLocalRotation = doorTransform != null ? doorTransform.localRotation : Quaternion.identity,
-                LastSentRotation = doorTransform != null ? doorTransform.localRotation : Quaternion.identity,
-                LastAppliedRotation = doorTransform != null ? doorTransform.localRotation : Quaternion.identity,
-                InteractionKind = InteractionKind.Tap
-            };
+            string key = BuildBusFsmKey(debugPath, fsmName);
+            uint id = HashPath(key);
 
-            entry.IsVehicleDoor = IsVehicleDoor(doorTransform, null);
-            entry.VehicleBody = entry.IsVehicleDoor ? FindVehicleBody(doorTransform) : null;
+            DoorEntry entry;
+            if (!_doorLookup.TryGetValue(id, out entry))
+            {
+                entry = new DoorEntry
+                {
+                    Id = id,
+                    Key = key,
+                    DebugPath = debugPath,
+                    Transform = doorTransform,
+                    Rigidbody = doorTransform != null ? doorTransform.GetComponent<Rigidbody>() : null,
+                    Hinge = null,
+                    BaseLocalRotation = doorTransform != null ? doorTransform.localRotation : Quaternion.identity,
+                    LastSentRotation = doorTransform != null ? doorTransform.localRotation : Quaternion.identity,
+                    LastAppliedRotation = doorTransform != null ? doorTransform.localRotation : Quaternion.identity,
+                    InteractionKind = InteractionKind.Tap
+                };
+                _doors.Add(entry);
+                _doorLookup.Add(id, entry);
+            }
+            else
+            {
+                // Keep debug path + transform updated as BUS moves around in the hierarchy.
+                entry.DebugPath = debugPath;
+                entry.Transform = doorTransform;
+                entry.Rigidbody = doorTransform != null ? doorTransform.GetComponent<Rigidbody>() : null;
+                entry.InteractionKind = InteractionKind.Tap;
+            }
+
+            entry.IsVehicleDoor = IsVehicleDoor(entry.Transform, entry.Hinge);
             if (entry.IsVehicleDoor)
             {
+                entry.VehicleBody = entry.VehicleBody ?? FindVehicleBody(entry.Transform);
                 entry.AllowVehiclePlayMaker = true;
                 entry.SkipHingeSync = true;
             }
@@ -239,13 +261,11 @@ namespace MyWinterCarMpMod.Sync
             entry.HasPlayMaker = true;
             UpdateRotationSyncPolicy(entry);
             EnsureScrapeState(entry);
-            _doors.Add(entry);
-            _doorLookup.Add(id, entry);
             _sorbetBindingsReady = false;
 
             if (_settings.VerboseLogging.Value)
             {
-                DebugLog.Verbose("DoorSync: bus FSM registered id=" + id + " fsm=" + fsmName + " path=" + debugPath);
+                DebugLog.Verbose("DoorSync: bus FSM registered id=" + id + " key=" + key + " fsm=" + fsmName + " path=" + debugPath);
             }
 
             return true;
@@ -540,32 +560,53 @@ namespace MyWinterCarMpMod.Sync
 
             bool changed = false;
             byte mask = 0;
+            byte auxMask = 0;
 
             ControlValueKind heaterTempKind;
             float heaterTempValue;
-            UpdateSorbetControl(_sorbetControls, SorbetControl.HeaterTemp, now, out heaterTempKind, out heaterTempValue, ref changed, ref mask);
+            UpdateSorbetControl(_sorbetControls, SorbetControl.HeaterTemp, now, out heaterTempKind, out heaterTempValue, ref changed, ref mask, ref auxMask);
 
             ControlValueKind heaterBlowerKind;
             float heaterBlowerValue;
-            UpdateSorbetControl(_sorbetControls, SorbetControl.HeaterBlower, now, out heaterBlowerKind, out heaterBlowerValue, ref changed, ref mask);
+            UpdateSorbetControl(_sorbetControls, SorbetControl.HeaterBlower, now, out heaterBlowerKind, out heaterBlowerValue, ref changed, ref mask, ref auxMask);
 
             ControlValueKind heaterDirectionKind;
             float heaterDirectionValue;
-            UpdateSorbetControl(_sorbetControls, SorbetControl.HeaterDirection, now, out heaterDirectionKind, out heaterDirectionValue, ref changed, ref mask);
+            UpdateSorbetControl(_sorbetControls, SorbetControl.HeaterDirection, now, out heaterDirectionKind, out heaterDirectionValue, ref changed, ref mask, ref auxMask);
 
             ControlValueKind windowHeaterKind;
             float windowHeaterValue;
-            UpdateSorbetControl(_sorbetControls, SorbetControl.WindowHeater, now, out windowHeaterKind, out windowHeaterValue, ref changed, ref mask);
+            UpdateSorbetControl(_sorbetControls, SorbetControl.WindowHeater, now, out windowHeaterKind, out windowHeaterValue, ref changed, ref mask, ref auxMask);
 
             ControlValueKind lightModesKind;
             float lightModesValue;
-            UpdateSorbetControl(_sorbetControls, SorbetControl.LightModes, now, out lightModesKind, out lightModesValue, ref changed, ref mask);
+            UpdateSorbetControl(_sorbetControls, SorbetControl.LightModes, now, out lightModesKind, out lightModesValue, ref changed, ref mask, ref auxMask);
+
+            ControlValueKind wipersKind;
+            float wipersValue;
+            UpdateSorbetControl(_sorbetControls, SorbetControl.Wipers, now, out wipersKind, out wipersValue, ref changed, ref mask, ref auxMask);
 
             ControlValueKind hazardKind;
             float hazardValue;
-            UpdateSorbetControl(_sorbetControls, SorbetControl.Hazard, now, out hazardKind, out hazardValue, ref changed, ref mask);
+            UpdateSorbetControl(_sorbetControls, SorbetControl.Hazard, now, out hazardKind, out hazardValue, ref changed, ref mask, ref auxMask);
 
-            if (mask == 0)
+            ControlValueKind turnSignalsKind;
+            float turnSignalsValue;
+            UpdateSorbetControl(_sorbetControls, SorbetControl.TurnSignals, now, out turnSignalsKind, out turnSignalsValue, ref changed, ref mask, ref auxMask);
+
+            ControlValueKind ignitionKind;
+            float ignitionValue;
+            UpdateSorbetControl(_sorbetControls, SorbetControl.Ignition, now, out ignitionKind, out ignitionValue, ref changed, ref mask, ref auxMask);
+
+            ControlValueKind starterKind;
+            float starterValue;
+            UpdateSorbetControl(_sorbetControls, SorbetControl.Starter, now, out starterKind, out starterValue, ref changed, ref mask, ref auxMask);
+
+            ControlValueKind interiorLightKind;
+            float interiorLightValue;
+            UpdateSorbetControl(_sorbetControls, SorbetControl.InteriorLight, now, out interiorLightKind, out interiorLightValue, ref changed, ref mask, ref auxMask);
+
+            if (mask == 0 && auxMask == 0)
             {
                 return false;
             }
@@ -581,6 +622,7 @@ namespace MyWinterCarMpMod.Sync
                 UnixTimeMs = unixTimeMs,
                 VehicleId = vehicleId,
                 Mask = mask,
+                AuxMask = auxMask,
                 HeaterTempKind = (byte)heaterTempKind,
                 HeaterTempValue = heaterTempValue,
                 HeaterBlowerKind = (byte)heaterBlowerKind,
@@ -591,8 +633,18 @@ namespace MyWinterCarMpMod.Sync
                 WindowHeaterValue = windowHeaterValue,
                 LightModesKind = (byte)lightModesKind,
                 LightModesValue = lightModesValue,
+                WipersKind = (byte)wipersKind,
+                WipersValue = wipersValue,
                 HazardKind = (byte)hazardKind,
-                HazardValue = hazardValue
+                HazardValue = hazardValue,
+                TurnSignalsKind = (byte)turnSignalsKind,
+                TurnSignalsValue = turnSignalsValue,
+                IgnitionKind = (byte)ignitionKind,
+                IgnitionValue = ignitionValue,
+                StarterKind = (byte)starterKind,
+                StarterValue = starterValue,
+                InteriorLightKind = (byte)interiorLightKind,
+                InteriorLightValue = interiorLightValue
             };
 
             if (_settings != null && _settings.VerboseLogging.Value && now >= _nextDashboardSummaryTime)
@@ -602,7 +654,12 @@ namespace MyWinterCarMpMod.Sync
                     " dir=" + heaterDirectionValue.ToString("F2") +
                     " win=" + windowHeaterValue.ToString("F2") +
                     " lights=" + lightModesValue.ToString("F2") +
-                    " hazard=" + hazardValue.ToString("F2"));
+                    " wipers=" + wipersValue.ToString("F2") +
+                    " hazard=" + hazardValue.ToString("F2") +
+                    " signal=" + turnSignalsValue.ToString("F2") +
+                    " ignition=" + ignitionValue.ToString("F2") +
+                    " starter=" + starterValue.ToString("F2") +
+                    " cabin=" + interiorLightValue.ToString("F2"));
                 _nextDashboardSummaryTime = now + 1.5f;
             }
 
@@ -654,7 +711,24 @@ namespace MyWinterCarMpMod.Sync
             }
 
             entry.LastRemoteScrapeSequence = state.Sequence;
-            entry.ScrapeSuppressUntilTime = now + 0.5f;
+            entry.ScrapeSuppressUntilTime = now + 0.75f;
+
+            bool sameAsRemoteBaseline = state.Layer == entry.LastRemoteScrapeLayer &&
+                Mathf.Abs(state.X - entry.LastRemoteScrapeX) <= 0.01f &&
+                Mathf.Abs(state.Xold - entry.LastRemoteScrapeXold) <= 0.01f &&
+                Mathf.Abs(state.Distance - entry.LastRemoteScrapeDistance) <= 0.001f;
+            if (sameAsRemoteBaseline && now < entry.ScrapeRemoteHoldUntil)
+            {
+                return;
+            }
+
+            entry.LastRemoteScrapeLayer = state.Layer;
+            entry.LastRemoteScrapeX = state.X;
+            entry.LastRemoteScrapeXold = state.Xold;
+            entry.LastRemoteScrapeDistance = state.Distance;
+            entry.LastRemoteScrapeApplyTime = now;
+            bool isFinishState = state.Distance <= ScrapeFinishDistance || state.Layer <= 0;
+            entry.ScrapeRemoteHoldUntil = now + (isFinishState ? 0.25f : 1.0f);
 
             bool changed = state.Layer != entry.LastScrapeLayer ||
                 Mathf.Abs(state.X - entry.LastScrapeX) > 0.01f ||
@@ -691,19 +765,23 @@ namespace MyWinterCarMpMod.Sync
 
             if (entry.ScrapeInside != null)
             {
-                entry.ScrapeInside.Value = true;
-                entry.ScrapeRemoteHoldUntil = now + 0.5f;
+                entry.ScrapeInside.Value = !isFinishState;
             }
 
-            if (shouldKick && entry.Fsm.Fsm.HasEvent("DOWN"))
+            if (!isFinishState && shouldKick && entry.Fsm.Fsm.HasEvent("DOWN"))
             {
                 EnsureGlobalTransitionForEvent(entry.Fsm, "DOWN");
                 entry.Fsm.SendEvent("DOWN");
             }
-            if (shouldKick && entry.Fsm.Fsm.HasEvent("SCRAPE"))
+            if (!isFinishState && shouldKick && entry.Fsm.Fsm.HasEvent("SCRAPE"))
             {
                 EnsureGlobalTransitionForEvent(entry.Fsm, "SCRAPE");
                 entry.Fsm.SendEvent("SCRAPE");
+            }
+            if (isFinishState && changed && entry.Fsm.Fsm.HasEvent("OFF"))
+            {
+                EnsureGlobalTransitionForEvent(entry.Fsm, "OFF");
+                entry.Fsm.SendEvent("OFF");
             }
             if (shouldKick)
             {
@@ -735,22 +813,33 @@ namespace MyWinterCarMpMod.Sync
             }
 
             float now = Time.realtimeSinceStartup;
-            ApplySorbetControl(_sorbetControls, SorbetControl.HeaterTemp, now, state.Mask, (ControlValueKind)state.HeaterTempKind, state.HeaterTempValue);
-            ApplySorbetControl(_sorbetControls, SorbetControl.HeaterBlower, now, state.Mask, (ControlValueKind)state.HeaterBlowerKind, state.HeaterBlowerValue);
-            ApplySorbetControl(_sorbetControls, SorbetControl.HeaterDirection, now, state.Mask, (ControlValueKind)state.HeaterDirectionKind, state.HeaterDirectionValue);
-            ApplySorbetControl(_sorbetControls, SorbetControl.WindowHeater, now, state.Mask, (ControlValueKind)state.WindowHeaterKind, state.WindowHeaterValue);
-            ApplySorbetControl(_sorbetControls, SorbetControl.LightModes, now, state.Mask, (ControlValueKind)state.LightModesKind, state.LightModesValue);
-            ApplySorbetControl(_sorbetControls, SorbetControl.Hazard, now, state.Mask, (ControlValueKind)state.HazardKind, state.HazardValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.HeaterTemp, now, state.Mask, state.AuxMask, (ControlValueKind)state.HeaterTempKind, state.HeaterTempValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.HeaterBlower, now, state.Mask, state.AuxMask, (ControlValueKind)state.HeaterBlowerKind, state.HeaterBlowerValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.HeaterDirection, now, state.Mask, state.AuxMask, (ControlValueKind)state.HeaterDirectionKind, state.HeaterDirectionValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.WindowHeater, now, state.Mask, state.AuxMask, (ControlValueKind)state.WindowHeaterKind, state.WindowHeaterValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.LightModes, now, state.Mask, state.AuxMask, (ControlValueKind)state.LightModesKind, state.LightModesValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.Wipers, now, state.Mask, state.AuxMask, (ControlValueKind)state.WipersKind, state.WipersValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.Hazard, now, state.Mask, state.AuxMask, (ControlValueKind)state.HazardKind, state.HazardValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.TurnSignals, now, state.Mask, state.AuxMask, (ControlValueKind)state.TurnSignalsKind, state.TurnSignalsValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.Ignition, now, state.Mask, state.AuxMask, (ControlValueKind)state.IgnitionKind, state.IgnitionValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.Starter, now, state.Mask, state.AuxMask, (ControlValueKind)state.StarterKind, state.StarterValue);
+            ApplySorbetControl(_sorbetControls, SorbetControl.InteriorLight, now, state.Mask, state.AuxMask, (ControlValueKind)state.InteriorLightKind, state.InteriorLightValue);
 
             if (_settings != null && _settings.VerboseLogging.Value && now >= _nextDashboardApplyLogTime)
             {
                 DebugLog.Verbose("DoorSync: applied sorbet dashboard state mask=" + state.Mask +
+                    " auxMask=" + state.AuxMask +
                     " temp=" + state.HeaterTempValue.ToString("F2") +
                     " blower=" + state.HeaterBlowerValue.ToString("F2") +
                     " dir=" + state.HeaterDirectionValue.ToString("F2") +
                     " win=" + state.WindowHeaterValue.ToString("F2") +
                     " lights=" + state.LightModesValue.ToString("F2") +
-                    " hazard=" + state.HazardValue.ToString("F2"));
+                    " wipers=" + state.WipersValue.ToString("F2") +
+                    " hazard=" + state.HazardValue.ToString("F2") +
+                    " signal=" + state.TurnSignalsValue.ToString("F2") +
+                    " ignition=" + state.IgnitionValue.ToString("F2") +
+                    " starter=" + state.StarterValue.ToString("F2") +
+                    " cabin=" + state.InteriorLightValue.ToString("F2"));
                 _nextDashboardApplyLogTime = now + 1.5f;
             }
         }
@@ -1020,7 +1109,19 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
+            string incomingEvent = NormalizeDoorEventName(state.EventName);
+            if (IsBusRouteEventLocalOnly(entry, incomingEvent))
+            {
+                return;
+            }
+
             entry.LastRemoteEventSequence = state.Sequence;
+            if (IsSorbetDashboardControlEntry(entry))
+            {
+                // Dashboard controls are synchronized by SorbetDashboardStateData.
+                // Ignore EventOnly door events to prevent ON/OFF echo loops.
+                return;
+            }
             if (entry.Fsm == null || !entry.HasPlayMaker)
             {
                 RequestRescan("missing PlayMaker for door id " + state.DoorId);
@@ -1083,6 +1184,11 @@ namespace MyWinterCarMpMod.Sync
 
             if (!string.IsNullOrEmpty(eventName))
             {
+                if (IsBusRouteEventLocalOnly(entry, eventName))
+                {
+                    return;
+                }
+
                 bool isScrape = IsScrapeEntry(entry);
                 bool isHeater = IsSorbetHeaterButton(entry);
                 bool isWindowHeater = isHeater && IsSorbetWindowHeater(entry);
@@ -1302,7 +1408,58 @@ namespace MyWinterCarMpMod.Sync
                 }
             }
 
+            int busPlayMakerAttached = RegisterBusFsmsAfterScan();
+            playMakerAttached += busPlayMakerAttached;
             DebugLog.Info("DoorSync: tracking " + _doors.Count + " door(s) in " + _lastSceneName + ". PlayMaker hooked=" + playMakerAttached + ".");
+        }
+
+        private int RegisterBusFsmsAfterScan()
+        {
+            PlayMakerFSM[] fsms = Resources.FindObjectsOfTypeAll<PlayMakerFSM>();
+            if (fsms == null || fsms.Length == 0)
+            {
+                return 0;
+            }
+
+            int attached = 0;
+            for (int i = 0; i < fsms.Length; i++)
+            {
+                PlayMakerFSM fsm = fsms[i];
+                if (fsm == null || fsm.gameObject == null || fsm.transform == null || fsm.Fsm == null)
+                {
+                    continue;
+                }
+
+                if (fsm.hideFlags != HideFlags.None)
+                {
+                    continue;
+                }
+
+                string fsmName = GetFsmName(fsm);
+                if (!string.Equals(fsmName, "Door", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(fsmName, "Start", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string path = BuildDebugPath(fsm.transform);
+                if (!IsBusPath(path))
+                {
+                    continue;
+                }
+
+                if (TryRegisterBusFsm(fsm, path))
+                {
+                    attached++;
+                }
+            }
+
+            if (attached > 0 && _settings != null && _settings.VerboseLogging.Value)
+            {
+                DebugLog.Verbose("DoorSync: bus FSM fallback attached=" + attached);
+            }
+
+            return attached;
         }
 
         private bool AddDoor(HingeJoint hinge, string key, string debugPath, ref int playMakerAttached)
@@ -2730,11 +2887,41 @@ namespace MyWinterCarMpMod.Sync
                 if (string.Equals(fsmName, "Door", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(fsmName, "Start", StringComparison.OrdinalIgnoreCase))
                 {
-                    return;
+                    // Keep BUS authority on host, but allow explicit rider stop-request style events
+                    // so a client passenger can request stops while sharing host-driven BUS movement.
+                    string normalizedBusEvent = NormalizeDoorEventName(triggerEvent);
+                    if (!IsBusClientRequestEvent(normalizedBusEvent))
+                    {
+                        return;
+                    }
+
+                    if (_settings.VerboseLogging.Value && now >= _nextEventLogTime)
+                    {
+                        DebugLog.Verbose("DoorSync: forwarding client bus request id=" + entry.Id +
+                            " fsm=" + fsmName +
+                            " event=" + (normalizedBusEvent ?? "<null>") +
+                            " path=" + entry.DebugPath);
+                        _nextEventLogTime = now + 1f;
+                    }
                 }
             }
 
             bool isSorbet = IsSorbetDoor(entry.DebugPath, entry.Transform);
+            if (IsSorbetDashboardControlEntry(entry))
+            {
+                // These controls are synchronized through SorbetDashboardStateData.
+                return;
+            }
+            if (entry.EventOnly && !isSorbet && !IsBusPath(entry.DebugPath))
+            {
+                // Ignore autonomous vehicle UI FSM chatter from non-authoritative vehicles
+                // (for example CARPARTS/GIFU dashboard loops). Keep EventOnly sync focused
+                // on Sorbet + BUS where we have explicit bindings.
+                if (entry.IsVehicleDoor || IsVehicleContextPath(entry.DebugPath))
+                {
+                    return;
+                }
+            }
             if (!string.IsNullOrEmpty(triggerEvent))
             {
                 if (string.Equals(triggerEvent, entry.MpOpenEventName, StringComparison.OrdinalIgnoreCase) ||
@@ -2809,16 +2996,17 @@ namespace MyWinterCarMpMod.Sync
                         string.Equals(eventName, entry.CloseEventName, StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(eventName, "ON", StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(eventName, "OFF", StringComparison.OrdinalIgnoreCase);
-                    if (isOpenCloseEvent)
-                    {
-                        entry.LastUseTime = now;
-                    }
-
                     bool isOffEvent = string.Equals(eventName, entry.CloseEventName, StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(eventName, "OFF", StringComparison.OrdinalIgnoreCase);
                     if (isOffEvent && !open && entry.LastDoorOpen == open && now - entry.LastUseTime > 0.5f)
                     {
                         return;
+                    }
+
+                    // Track explicit user toggles only when logical state changed.
+                    if (isOpenCloseEvent && open != entry.LastDoorOpen)
+                    {
+                        entry.LastUseTime = now;
                     }
                 }
 
@@ -2842,6 +3030,11 @@ namespace MyWinterCarMpMod.Sync
                 {
                     return;
                 }
+            }
+
+            if (IsBusRouteEventLocalOnly(entry, eventName))
+            {
+                return;
             }
 
             entry.LastDoorOpen = open;
@@ -2915,6 +3108,19 @@ namespace MyWinterCarMpMod.Sync
             DebugLog.Warn("DoorSync: rescan scheduled (" + _rescanReason + ").");
         }
 
+        public void DevForceRescan(string reason)
+        {
+            if (!Enabled)
+            {
+                return;
+            }
+
+            _pendingRescan = true;
+            _rescanReason = string.IsNullOrEmpty(reason) ? "dev" : reason;
+            _nextRescanTime = Time.realtimeSinceStartup;
+            DebugLog.Warn("DoorSync: dev rescan requested (" + _rescanReason + ").");
+        }
+
         private static Transform ResolveDoorTransform(Transform fsmTransform)
         {
             if (fsmTransform == null)
@@ -2973,6 +3179,48 @@ namespace MyWinterCarMpMod.Sync
             }
 
             return false;
+        }
+
+        private bool IsBusRouteEventLocalOnly(DoorEntry entry, string eventName)
+        {
+            if (entry == null || string.IsNullOrEmpty(eventName))
+            {
+                return false;
+            }
+
+            if (!IsBusPath(entry.DebugPath))
+            {
+                return false;
+            }
+
+            string fsmName = GetFsmName(entry.Fsm);
+            if (!string.Equals(fsmName, "Start", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(fsmName, "Door", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return ContainsAnyToken(eventName, BusPaymentEventTokens);
+        }
+
+        private static bool IsBusClientRequestEvent(string eventName)
+        {
+            if (string.IsNullOrEmpty(eventName))
+            {
+                return false;
+            }
+
+            if (string.Equals(eventName, "STOP", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return ContainsAnyToken(eventName, BusClientRequestEventTokens);
+        }
+
+        private static bool IsVehicleContextPath(string debugPath)
+        {
+            return ContainsAnyToken(debugPath, VehicleContextPathTokens);
         }
 
         private static Rigidbody FindVehicleBody(Transform doorTransform)
@@ -3240,9 +3488,41 @@ namespace MyWinterCarMpMod.Sync
             return lower.Contains("buttonheater") || lower.Contains("heater") || lower.Contains("blower") || lower.Contains("windowheater");
         }
 
+        private static bool IsSorbetDashboardControlEntry(DoorEntry entry)
+        {
+            if (entry == null || !entry.EventOnly || string.IsNullOrEmpty(entry.DebugPath))
+            {
+                return false;
+            }
+
+            string lower = entry.DebugPath.ToLowerInvariant();
+            if (!lower.Contains("sorbet"))
+            {
+                return false;
+            }
+
+            return lower.Contains("buttonheater") ||
+                lower.Contains("buttonwindowheater") ||
+                lower.Contains("buttonlightmodes") ||
+                lower.Contains("buttonwipers") ||
+                lower.Contains("buttonhazard") ||
+                lower.Contains("turnsignals") ||
+                lower.Contains("ignition") ||
+                lower.Contains("starter") ||
+                lower.Contains("interiorlight");
+        }
+
         private void UpdateScrapeState(DoorEntry entry, float now)
         {
             if (entry == null || !entry.HasScrapeState)
+            {
+                return;
+            }
+
+            // Prevent echoing remote-driven scrape values back as local updates.
+            bool localScrapeRecent = entry.LastLocalScrapeTime > 0f && now - entry.LastLocalScrapeTime <= 0.35f;
+            if (!localScrapeRecent &&
+                (now < entry.ScrapeRemoteHoldUntil || now - entry.LastRemoteScrapeApplyTime <= 0.5f))
             {
                 return;
             }
@@ -3269,6 +3549,24 @@ namespace MyWinterCarMpMod.Sync
             float x = entry.ScrapeX.Value;
             float xold = entry.ScrapeXold.Value;
             float dist = entry.ScrapeDistance.Value;
+            bool inside = entry.ScrapeInside != null && entry.ScrapeInside.Value;
+
+            // Ignore only near-idle drift when nobody is actively scraping locally.
+            // Keep updates flowing even if some scrape FSMs never toggle "Inside" reliably.
+            bool likelyIdleDrift = !inside &&
+                !localScrapeRecent &&
+                dist >= 0.75f &&
+                Mathf.Abs(x) <= 0.05f &&
+                Mathf.Abs(xold) <= 0.05f;
+            if (likelyIdleDrift)
+            {
+                entry.LastScrapeLayer = layer;
+                entry.LastScrapeX = x;
+                entry.LastScrapeXold = xold;
+                entry.LastScrapeDistance = dist;
+                entry.ScrapeDirtyWhileRemote = false;
+                return;
+            }
 
             bool changed = layer != entry.LastScrapeLayer ||
                 Mathf.Abs(x - entry.LastScrapeX) > 0.01f ||
@@ -3423,7 +3721,12 @@ namespace MyWinterCarMpMod.Sync
             AddSorbetControl(SorbetControl.HeaterDirection, "ButtonHeaterDirection", new[] { "direction", "vent", "defrost" });
             AddSorbetControl(SorbetControl.WindowHeater, "ButtonWindowHeater", new[] { "window", "heater", "defrost" });
             AddSorbetControl(SorbetControl.LightModes, "ButtonLightModes", new[] { "light", "mode" });
+            AddSorbetControl(SorbetControl.Wipers, "ButtonWipers", new[] { "wiper" });
             AddSorbetControl(SorbetControl.Hazard, "ButtonHazard", new[] { "hazard", "indicator" });
+            AddSorbetControl(SorbetControl.TurnSignals, "TurnSignals", new[] { "turn", "signal", "indicator" });
+            AddSorbetControl(SorbetControl.Ignition, "IGNITION", new[] { "ignition", "key", "engine" });
+            AddSorbetControl(SorbetControl.Starter, "STARTER", new[] { "starter", "start", "engine" });
+            AddSorbetControl(SorbetControl.InteriorLight, "InteriorLight", new[] { "interior", "light", "lamp" });
 
             _sorbetBindingsReady = true;
         }
@@ -3491,7 +3794,7 @@ namespace MyWinterCarMpMod.Sync
                 PlayMakerBridge.FindBoolByTokens(fsm, new[] { binding.Token, "on", "off", "enabled" });
         }
 
-        private void UpdateSorbetControl(List<SorbetControlBinding> bindings, SorbetControl control, float now, out ControlValueKind kind, out float value, ref bool changed, ref byte mask)
+        private void UpdateSorbetControl(List<SorbetControlBinding> bindings, SorbetControl control, float now, out ControlValueKind kind, out float value, ref bool changed, ref byte mask, ref byte auxMask)
         {
             kind = ControlValueKind.None;
             value = 0f;
@@ -3514,15 +3817,19 @@ namespace MyWinterCarMpMod.Sync
 
             if (IsStateIndexControl(control))
             {
-                int stateIndex = GetActiveStateIndex(binding.Entry.Fsm);
-                if (stateIndex >= 0)
+                // Prefer explicit vars when present; state-index is fallback only.
+                if (!TryReadControlValue(binding, out kind, out value))
                 {
-                    kind = ControlValueKind.StateIndex;
-                    value = stateIndex;
-                }
-                else if (!TryReadControlValue(binding, out kind, out value))
-                {
-                    return;
+                    int stateIndex = GetActiveStateIndex(binding.Entry.Fsm);
+                    if (stateIndex >= 0)
+                    {
+                        kind = ControlValueKind.StateIndex;
+                        value = stateIndex;
+                    }
+                    else
+                    {
+                        return;
+                    }
                 }
             }
             else if (!TryReadControlValue(binding, out kind, out value))
@@ -3530,7 +3837,7 @@ namespace MyWinterCarMpMod.Sync
                 return;
             }
 
-            mask |= (byte)(1 << (int)control);
+            SetControlMaskBit(control, ref mask, ref auxMask);
 
             bool valueChanged = kind != binding.LastKind || Mathf.Abs(value - binding.LastValue) > 0.001f;
             if (valueChanged)
@@ -3549,9 +3856,9 @@ namespace MyWinterCarMpMod.Sync
             }
         }
 
-        private void ApplySorbetControl(List<SorbetControlBinding> bindings, SorbetControl control, float now, byte mask, ControlValueKind kind, float value)
+        private void ApplySorbetControl(List<SorbetControlBinding> bindings, SorbetControl control, float now, byte mask, byte auxMask, ControlValueKind kind, float value)
         {
-            if ((mask & (1 << (int)control)) == 0)
+            if (!HasControlMaskBit(control, mask, auxMask))
             {
                 return;
             }
@@ -3621,6 +3928,49 @@ namespace MyWinterCarMpMod.Sync
 
             binding.LastKind = kind;
             binding.LastValue = value;
+        }
+
+        private static void SetControlMaskBit(SorbetControl control, ref byte mask, ref byte auxMask)
+        {
+            int index = (int)control;
+            if (index < 0)
+            {
+                return;
+            }
+
+            if (index < 8)
+            {
+                mask |= (byte)(1 << index);
+                return;
+            }
+
+            int auxIndex = index - 8;
+            if (auxIndex < 8)
+            {
+                auxMask |= (byte)(1 << auxIndex);
+            }
+        }
+
+        private static bool HasControlMaskBit(SorbetControl control, byte mask, byte auxMask)
+        {
+            int index = (int)control;
+            if (index < 0)
+            {
+                return false;
+            }
+
+            if (index < 8)
+            {
+                return (mask & (1 << index)) != 0;
+            }
+
+            int auxIndex = index - 8;
+            if (auxIndex < 8)
+            {
+                return (auxMask & (1 << auxIndex)) != 0;
+            }
+
+            return false;
         }
 
         private static void SendToggleEvent(PlayMakerFSM fsm, bool on)
@@ -3961,7 +4311,10 @@ namespace MyWinterCarMpMod.Sync
             return control == SorbetControl.HeaterTemp ||
                 control == SorbetControl.HeaterBlower ||
                 control == SorbetControl.HeaterDirection ||
-                control == SorbetControl.LightModes;
+                control == SorbetControl.LightModes ||
+                control == SorbetControl.Wipers ||
+                control == SorbetControl.TurnSignals ||
+                control == SorbetControl.Ignition;
         }
 
         private static bool IsHeaterStepEvent(string eventName)
@@ -4303,7 +4656,12 @@ namespace MyWinterCarMpMod.Sync
             HeaterDirection = 2,
             WindowHeater = 3,
             LightModes = 4,
-            Hazard = 5
+            Hazard = 5,
+            Wipers = 6,
+            TurnSignals = 7,
+            Ignition = 8,
+            Starter = 9,
+            InteriorLight = 10
         }
 
         private enum ControlValueKind : byte
@@ -4372,10 +4730,15 @@ namespace MyWinterCarMpMod.Sync
             public float LastScrapeX;
             public float LastScrapeXold;
             public float LastScrapeDistance;
+            public int LastRemoteScrapeLayer;
+            public float LastRemoteScrapeX;
+            public float LastRemoteScrapeXold;
+            public float LastRemoteScrapeDistance;
             public uint LastRemoteScrapeSequence;
             public float ScrapeSuppressUntilTime;
             public float ScrapeLocalAuthorityUntil;
             public float ScrapeRemoteHoldUntil;
+            public float LastRemoteScrapeApplyTime;
             public float LastLocalScrapeTime;
             public bool ScrapeDirtyWhileRemote;
         }

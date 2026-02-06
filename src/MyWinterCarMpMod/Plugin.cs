@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
+using HutongGames.PlayMaker;
 using MyWinterCarMpMod.Config;
 using MyWinterCarMpMod.Net;
 using MyWinterCarMpMod.Patches;
@@ -14,7 +16,7 @@ using UnityEngine;
 
 namespace MyWinterCarMpMod
 {
-    [BepInPlugin("com.tudor.mywintercarmpmod", "My Winter Car MP Mod", "0.1.7")]
+    [BepInPlugin("com.tudor.mywintercarmpmod", "My Winter Car MP Mod", "0.1.8")]
     public sealed class Plugin : BaseUnityPlugin
     {
         internal static bool AllowMultipleInstances;
@@ -33,6 +35,7 @@ namespace MyWinterCarMpMod
         private WeatherScanner _weatherScanner;
         private RadioScanner _radioScanner;
         private BusSync _busSync;
+        private BusSeatSync _busSeatSync;
         private ITransport _transport;
         private LanDiscovery _lanDiscovery;
         private Vector2 _lanScroll;
@@ -43,6 +46,14 @@ namespace MyWinterCarMpMod
         private Vector3 _devSavedPosition;
         private bool _devHasSavedPosition;
         private string _devStatus;
+        private float _devVehicleScanTime;
+        private Transform _devCachedBus;
+        private Transform _devCachedSorbet;
+        private string _devCachedBusPath;
+        private string _devCachedSorbetPath;
+        private float _devLocatorNextUpdateTime;
+        private int _devTrafficActiveCount;
+        private string _devSearchToken = string.Empty;
 
         private string _menuSteamIdText;
         private string _menuHostIpText;
@@ -90,6 +101,7 @@ namespace MyWinterCarMpMod
             _weatherScanner = new WeatherScanner(_settings);
             _radioScanner = new RadioScanner(_settings);
             _busSync = new BusSync(_settings, _doorSync);
+            _busSeatSync = new BusSeatSync(_settings);
             _devFreecam = new DevFreecam();
             _overlayVisible = _settings.OverlayEnabled.Value;
             _buildId = Application.version + "|" + Application.unityVersion;
@@ -140,6 +152,13 @@ namespace MyWinterCarMpMod
                 bool allowScan = !IsMainMenuScene();
                 _busSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
                 _busSync.Update(Time.realtimeSinceStartup);
+            }
+
+            if (_busSeatSync != null && _levelSync != null)
+            {
+                bool allowScan = !IsMainMenuScene();
+                _busSeatSync.UpdateScene(_levelSync.CurrentLevelIndex, _levelSync.CurrentLevelName, allowScan);
+                _busSeatSync.Update(Time.realtimeSinceStartup);
             }
 
             if (_vehicleSync != null && _levelSync != null)
@@ -303,6 +322,22 @@ namespace MyWinterCarMpMod
             if (_settings.DevMenuEnabled.Value && Input.GetKeyDown(KeyCode.F5))
             {
                 _devMenuVisible = !_devMenuVisible;
+            }
+
+            bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            if (_settings.DevMenuEnabled.Value && shift)
+            {
+                // Teleport hotkeys (use Shift to avoid clashing with existing host/client toggles).
+                if (Input.GetKeyDown(KeyCode.F6))
+                {
+                    TeleportToBus();
+                    return;
+                }
+                if (Input.GetKeyDown(KeyCode.F7))
+                {
+                    TeleportToSorbet();
+                    return;
+                }
             }
 
             if (_settings.Mode.Value == Mode.Host)
@@ -768,8 +803,8 @@ namespace MyWinterCarMpMod
                 return;
             }
 
-            float width = 260f;
-            float height = 230f;
+            float width = 320f;
+            float height = 360f;
             float x = Screen.width - width - 10f;
             float y = 10f;
             if (x < 10f)
@@ -780,7 +815,80 @@ namespace MyWinterCarMpMod
             Rect area = new Rect(x, y, width, height);
             GUILayout.BeginArea(area, GUI.skin.box);
             GUILayout.Label("Dev Menu");
+            _devMenuScroll = GUILayout.BeginScrollView(_devMenuScroll, false, true);
 
+            UpdateDevLocatorCache();
+
+            GUILayout.Label("Locator");
+            DrawVehicleLocatorRow("Bus", _devCachedBus);
+            DrawVehicleLocatorRow("Sorbet", _devCachedSorbet);
+            int trackedNpcVehicles = _npcSync != null ? _npcSync.TrackedVehicleCount : 0;
+            GUILayout.Label("Tracked NPC vehicles: " + trackedNpcVehicles);
+            GUILayout.Label("Traffic vehicles active: " + _devTrafficActiveCount);
+
+            if (GUILayout.Button("Teleport to Nearest Traffic"))
+            {
+                TeleportToNearestTraffic();
+            }
+            if (GUILayout.Button("Teleport to Nearest NPC Vehicle"))
+            {
+                TeleportToNearestNpcVehicle();
+            }
+
+            GUILayout.Space(6f);
+            GUILayout.Label("Debug Actions");
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Force Npc Rescan"))
+            {
+                if (_npcSync != null)
+                {
+                    _npcSync.DevForceRescan(true);
+                    _devStatus = "NPC rescan triggered.";
+                }
+            }
+            if (GUILayout.Button("Force Door Rescan"))
+            {
+                if (_doorSync != null)
+                {
+                    _doorSync.DevForceRescan("dev menu");
+                    _devStatus = "Door rescan requested.";
+                }
+            }
+            GUILayout.EndHorizontal();
+            if (GUILayout.Button("Dump Bus FSM State/Events"))
+            {
+                DumpBusFsms();
+            }
+            if (GUILayout.Button("Dump Traffic Vehicles"))
+            {
+                DumpTrafficVehicles();
+            }
+            if (GUILayout.Button("Dump NpcSync Vehicles"))
+            {
+                if (_npcSync != null)
+                {
+                    _npcSync.DevDumpTracked("dev menu");
+                    _devStatus = "Dumped NpcSync entries to log.";
+                }
+            }
+            if (GUILayout.Button("Dump Bus Candidates"))
+            {
+                DumpBusCandidates();
+            }
+
+            GUILayout.Space(6f);
+            GUILayout.Label("Teleport Search");
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Token", GUILayout.Width(50f));
+            _devSearchToken = GUILayout.TextField(_devSearchToken ?? string.Empty, GUILayout.MinWidth(120f));
+            GUILayout.EndHorizontal();
+            if (GUILayout.Button("Teleport to First Match"))
+            {
+                TeleportToSearchToken(_devSearchToken);
+            }
+            GUILayout.Label("Hotkeys: Shift+F6 Bus, Shift+F7 Sorbet");
+
+            GUILayout.Space(6f);
             bool freecamActive = _devFreecam != null && _devFreecam.IsActive;
             bool nextFreecam = GUILayout.Toggle(freecamActive, "Freecam (RMB to look)", GUI.skin.button);
             if (nextFreecam != freecamActive && _devFreecam != null)
@@ -827,6 +935,16 @@ namespace MyWinterCarMpMod
             {
                 TeleportToRemote();
             }
+
+            if (GUILayout.Button("Teleport to Bus"))
+            {
+                TeleportToBus();
+            }
+
+            if (GUILayout.Button("Teleport to Sorbet"))
+            {
+                TeleportToSorbet();
+            }
             GUI.enabled = true;
 
             if (inMenu)
@@ -839,7 +957,824 @@ namespace MyWinterCarMpMod
                 GUILayout.Label(_devStatus);
             }
 
+            GUILayout.EndScrollView();
             GUILayout.EndArea();
+        }
+
+        private void UpdateDevLocatorCache()
+        {
+            float now = Time.realtimeSinceStartup;
+            if (now < _devLocatorNextUpdateTime)
+            {
+                return;
+            }
+
+            _devLocatorNextUpdateTime = now + 1.0f;
+
+            // Refresh cached vehicle transforms for locator.
+            string trackedBusPath;
+            Transform trackedBus;
+            if (_npcSync != null && _npcSync.TryGetTrackedBus(out trackedBus, out trackedBusPath))
+            {
+                _devCachedBus = trackedBus;
+                _devCachedBusPath = trackedBusPath ?? string.Empty;
+            }
+            else
+            {
+                _devCachedBus = ResolveDevVehicle(ref _devCachedBus, "bus", "NPC_CARS");
+                _devCachedBusPath = _devCachedBus != null ? ObjectKeyBuilder.BuildDebugPath(_devCachedBus) : string.Empty;
+            }
+            _devCachedSorbet = ResolveDevVehicle(ref _devCachedSorbet, "sorbet", null);
+
+            _devCachedSorbetPath = _devCachedSorbet != null ? ObjectKeyBuilder.BuildDebugPath(_devCachedSorbet) : string.Empty;
+
+            _devTrafficActiveCount = CountTrafficVehiclesActive();
+        }
+
+        private void DrawVehicleLocatorRow(string label, Transform vehicle)
+        {
+            Vector3 localPos;
+            bool hasLocal = TryGetLocalPosition(out localPos);
+
+            if (vehicle == null)
+            {
+                GUILayout.Label(label + ": <not found>");
+                return;
+            }
+
+            Vector3 pos = vehicle.position;
+            string distText = hasLocal ? Vector3.Distance(localPos, pos).ToString("F1") + "m" : "?";
+            bool active = false;
+            try
+            {
+                active = vehicle.gameObject != null && vehicle.gameObject.activeInHierarchy;
+            }
+            catch (System.Exception)
+            {
+            }
+
+            GUILayout.Label(label + ": " + pos.x.ToString("F1") + "," + pos.y.ToString("F1") + "," + pos.z.ToString("F1") +
+                "  dist=" + distText +
+                "  active=" + active);
+
+            string path = string.Empty;
+            if (string.Equals(label, "Bus", System.StringComparison.OrdinalIgnoreCase))
+            {
+                path = _devCachedBusPath ?? string.Empty;
+            }
+            else if (string.Equals(label, "Sorbet", System.StringComparison.OrdinalIgnoreCase))
+            {
+                path = _devCachedSorbetPath ?? string.Empty;
+            }
+            else
+            {
+                try
+                {
+                    path = ObjectKeyBuilder.BuildDebugPath(vehicle);
+                }
+                catch (System.Exception)
+                {
+                    path = string.Empty;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(path))
+            {
+                GUILayout.Label(path);
+            }
+        }
+
+        private int CountTrafficVehiclesActive()
+        {
+            int count = 0;
+
+            CarDynamics[] dynamics = UnityEngine.Object.FindObjectsOfType<CarDynamics>();
+            if (dynamics != null)
+            {
+                for (int i = 0; i < dynamics.Length; i++)
+                {
+                    CarDynamics car = dynamics[i];
+                    if (car == null || car.gameObject == null)
+                    {
+                        continue;
+                    }
+
+                    GameObject go = car.gameObject;
+                    if (!go.activeInHierarchy)
+                    {
+                        continue;
+                    }
+
+                    if (go.name != null && go.name.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        continue;
+                    }
+
+                    string path = ObjectKeyBuilder.BuildDebugPath(go);
+                    if (path.IndexOf("TRAFFIC", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        count++;
+                    }
+                }
+            }
+
+            ArcadeCarNoPhysics[] arcade = UnityEngine.Object.FindObjectsOfType<ArcadeCarNoPhysics>();
+            if (arcade != null)
+            {
+                for (int i = 0; i < arcade.Length; i++)
+                {
+                    ArcadeCarNoPhysics car = arcade[i];
+                    if (car == null || car.gameObject == null)
+                    {
+                        continue;
+                    }
+
+                    GameObject go = car.gameObject;
+                    if (!go.activeInHierarchy)
+                    {
+                        continue;
+                    }
+
+                    if (go.name != null && go.name.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        continue;
+                    }
+
+                    string path = ObjectKeyBuilder.BuildDebugPath(go);
+                    if (path.IndexOf("TRAFFIC", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        count++;
+                    }
+                }
+            }
+
+            return count;
+        }
+
+        private void TeleportToNearestTraffic()
+        {
+            Vector3 pos;
+            string path;
+            float dist;
+            if (!TryGetNearestNpcVehicleTeleportPosition(false, out pos, out path, out dist))
+            {
+                _devStatus = "No traffic vehicles found.";
+                return;
+            }
+
+            TeleportLocal(pos);
+            _devStatus = "Teleported to nearest traffic (" + path + ", " + dist.ToString("F1") + "m).";
+        }
+
+        private void TeleportToNearestNpcVehicle()
+        {
+            Vector3 pos;
+            string path;
+            float dist;
+            if (!TryGetNearestNpcVehicleTeleportPosition(true, out pos, out path, out dist))
+            {
+                _devStatus = "No NPC vehicles found.";
+                return;
+            }
+
+            TeleportLocal(pos);
+            _devStatus = "Teleported to nearest NPC vehicle (" + path + ", " + dist.ToString("F1") + "m).";
+        }
+
+        private bool TryGetNearestNpcVehicleTeleportPosition(bool includeNpcCars, out Vector3 position, out string matchPath, out float distance)
+        {
+            position = Vector3.zero;
+            matchPath = string.Empty;
+            distance = 0f;
+
+            Vector3 localPos;
+            if (!TryGetLocalPosition(out localPos))
+            {
+                return false;
+            }
+
+            bool includeInactive = _settings != null && _settings.Mode.Value == Mode.Client;
+
+            float bestActiveDist = float.MaxValue;
+            Transform bestActive = null;
+            string bestActivePath = string.Empty;
+
+            float bestAnyDist = float.MaxValue;
+            Transform bestAny = null;
+            string bestAnyPath = string.Empty;
+
+            CarDynamics[] dyn = includeInactive ? Resources.FindObjectsOfTypeAll<CarDynamics>() : UnityEngine.Object.FindObjectsOfType<CarDynamics>();
+            if (dyn != null)
+            {
+                for (int i = 0; i < dyn.Length; i++)
+                {
+                    CarDynamics car = dyn[i];
+                    if (car == null || car.gameObject == null || car.transform == null)
+                    {
+                        continue;
+                    }
+
+                    GameObject go = car.gameObject;
+                    if (includeInactive && go.hideFlags != HideFlags.None)
+                    {
+                        continue;
+                    }
+
+                    if (go.name != null && go.name.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        continue;
+                    }
+
+                    string path = ObjectKeyBuilder.BuildDebugPath(go);
+                    bool isTraffic = path.IndexOf("TRAFFIC", StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool isNpcCars = includeNpcCars && path.IndexOf("NPC_CARS", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (!isTraffic && !isNpcCars)
+                    {
+                        continue;
+                    }
+
+                    float d = Vector3.Distance(localPos, go.transform.position);
+                    bool active = go.activeInHierarchy;
+                    if (active)
+                    {
+                        if (d < bestActiveDist)
+                        {
+                            bestActiveDist = d;
+                            bestActive = go.transform;
+                            bestActivePath = path;
+                        }
+                    }
+                    else if (d < bestAnyDist)
+                    {
+                        bestAnyDist = d;
+                        bestAny = go.transform;
+                        bestAnyPath = path;
+                    }
+                }
+            }
+
+            ArcadeCarNoPhysics[] arc = includeInactive ? Resources.FindObjectsOfTypeAll<ArcadeCarNoPhysics>() : UnityEngine.Object.FindObjectsOfType<ArcadeCarNoPhysics>();
+            if (arc != null)
+            {
+                for (int i = 0; i < arc.Length; i++)
+                {
+                    ArcadeCarNoPhysics car = arc[i];
+                    if (car == null || car.gameObject == null || car.transform == null)
+                    {
+                        continue;
+                    }
+
+                    GameObject go = car.gameObject;
+                    if (includeInactive && go.hideFlags != HideFlags.None)
+                    {
+                        continue;
+                    }
+
+                    if (go.name != null && go.name.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        continue;
+                    }
+
+                    string path = ObjectKeyBuilder.BuildDebugPath(go);
+                    bool isTraffic = path.IndexOf("TRAFFIC", StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool isNpcCars = includeNpcCars && path.IndexOf("NPC_CARS", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (!isTraffic && !isNpcCars)
+                    {
+                        continue;
+                    }
+
+                    float d = Vector3.Distance(localPos, go.transform.position);
+                    bool active = go.activeInHierarchy;
+                    if (active)
+                    {
+                        if (d < bestActiveDist)
+                        {
+                            bestActiveDist = d;
+                            bestActive = go.transform;
+                            bestActivePath = path;
+                        }
+                    }
+                    else if (d < bestAnyDist)
+                    {
+                        bestAnyDist = d;
+                        bestAny = go.transform;
+                        bestAnyPath = path;
+                    }
+                }
+            }
+
+            Transform best = bestActive ?? bestAny;
+            if (best == null)
+            {
+                return false;
+            }
+
+            string chosenPath = bestActive != null ? bestActivePath : bestAnyPath;
+            float chosenDist = bestActive != null ? bestActiveDist : bestAnyDist;
+
+            position = best.position + (best.right * 2f) + (Vector3.up * 0.15f);
+            matchPath = chosenPath;
+            distance = chosenDist;
+            return true;
+        }
+
+        private void TeleportToSearchToken(string token)
+        {
+            if (string.IsNullOrEmpty(token))
+            {
+                _devStatus = "Search token is empty.";
+                return;
+            }
+
+            string needle = token.Trim();
+            if (needle.Length == 0)
+            {
+                _devStatus = "Search token is empty.";
+                return;
+            }
+
+            Vector3 localPos;
+            if (!TryGetLocalPosition(out localPos))
+            {
+                _devStatus = "Local player not found.";
+                return;
+            }
+
+            Transform match;
+            string matchPath;
+            if (TryFindTeleportMatch(needle, out match, out matchPath))
+            {
+                TeleportLocal(match.position + (match.right * 2f) + (Vector3.up * 0.15f));
+                _devStatus = "Teleported to match (" + matchPath + ").";
+                return;
+            }
+
+            _devStatus = "No match for \"" + needle + "\".";
+        }
+
+        private bool TryFindTeleportMatch(string needle, out Transform match, out string matchPath)
+        {
+            match = null;
+            matchPath = string.Empty;
+
+            if (string.IsNullOrEmpty(needle))
+            {
+                return false;
+            }
+
+            bool includeInactive = _settings != null && _settings.Mode.Value == Mode.Client;
+
+            CarDynamics[] dyn = includeInactive ? Resources.FindObjectsOfTypeAll<CarDynamics>() : UnityEngine.Object.FindObjectsOfType<CarDynamics>();
+            if (TryFindMatchInComponents(dyn, needle, out match, out matchPath))
+            {
+                return true;
+            }
+
+            ArcadeCarNoPhysics[] arc = includeInactive ? Resources.FindObjectsOfTypeAll<ArcadeCarNoPhysics>() : UnityEngine.Object.FindObjectsOfType<ArcadeCarNoPhysics>();
+            if (TryFindMatchInComponents(arc, needle, out match, out matchPath))
+            {
+                return true;
+            }
+
+            PlayMakerFSM[] fsms = UnityEngine.Object.FindObjectsOfType<PlayMakerFSM>();
+            if (fsms != null)
+            {
+                for (int i = 0; i < fsms.Length; i++)
+                {
+                    PlayMakerFSM fsm = fsms[i];
+                    if (fsm == null || fsm.transform == null)
+                    {
+                        continue;
+                    }
+
+                    string fsmName = (fsm.Fsm != null && !string.IsNullOrEmpty(fsm.Fsm.Name)) ? fsm.Fsm.Name : (fsm.FsmName ?? string.Empty);
+                    string path = ObjectKeyBuilder.BuildDebugPath(fsm.transform);
+                    if (ContainsToken(fsmName, needle) || ContainsToken(path, needle) || ContainsToken(fsm.gameObject != null ? fsm.gameObject.name : string.Empty, needle))
+                    {
+                        match = fsm.transform;
+                        matchPath = path + " (fsm=" + fsmName + ")";
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryFindMatchInComponents<T>(T[] components, string needle, out Transform match, out string matchPath) where T : Component
+        {
+            match = null;
+            matchPath = string.Empty;
+
+            if (components == null || components.Length == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < components.Length; i++)
+            {
+                T comp = components[i];
+                if (comp == null || comp.gameObject == null || comp.transform == null)
+                {
+                    continue;
+                }
+
+                GameObject go = comp.gameObject;
+                if (_settings != null && _settings.Mode.Value == Mode.Client && go.hideFlags != HideFlags.None)
+                {
+                    continue;
+                }
+
+                string path = ObjectKeyBuilder.BuildDebugPath(go);
+                if (ContainsToken(go.name, needle) || ContainsToken(path, needle))
+                {
+                    match = comp.transform;
+                    matchPath = path;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool ContainsToken(string haystack, string needle)
+        {
+            if (string.IsNullOrEmpty(haystack) || string.IsNullOrEmpty(needle))
+            {
+                return false;
+            }
+
+            return haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private void DumpBusFsms()
+        {
+            Transform bus = ResolveDevVehicle(ref _devCachedBus, "bus", "NPC_CARS");
+            if (bus == null)
+            {
+                _devStatus = "Bus not found.";
+                return;
+            }
+
+            PlayMakerFSM[] fsms = bus.GetComponentsInChildren<PlayMakerFSM>(true);
+            if (fsms == null || fsms.Length == 0)
+            {
+                _devStatus = "Bus has no PlayMaker FSMs?";
+                return;
+            }
+
+            Vector3 p = bus.position;
+            Rigidbody rb = bus.GetComponent<Rigidbody>();
+            float speed = rb != null ? rb.velocity.magnitude : 0f;
+            bool active = bus.gameObject != null && bus.gameObject.activeInHierarchy;
+            DebugLog.Warn("Bus FSM dump (count=" + fsms.Length + ") root=" + ObjectKeyBuilder.BuildDebugPath(bus) +
+                " active=" + active +
+                " speed=" + speed.ToString("F1") +
+                " pos=" + p.x.ToString("F1") + "," + p.y.ToString("F1") + "," + p.z.ToString("F1"));
+            int logged = 0;
+            for (int i = 0; i < fsms.Length && logged < 30; i++)
+            {
+                PlayMakerFSM fsm = fsms[i];
+                if (fsm == null || fsm.Fsm == null)
+                {
+                    continue;
+                }
+
+                string fsmName = (fsm.Fsm != null && !string.IsNullOrEmpty(fsm.Fsm.Name)) ? fsm.Fsm.Name : (fsm.FsmName ?? string.Empty);
+                string path = ObjectKeyBuilder.BuildDebugPath(fsm.transform);
+
+                string lastEvent = (fsm.Fsm.LastTransition != null) ? fsm.Fsm.LastTransition.EventName : string.Empty;
+                DebugLog.Verbose("BusFSM: fsm=" + fsmName +
+                    " state=" + (fsm.ActiveStateName ?? "<null>") +
+                    " last=" + (string.IsNullOrEmpty(lastEvent) ? "<none>" : lastEvent) +
+                    " path=" + path);
+
+                List<string> evNames = new List<string>();
+                FsmEvent[] events = fsm.Fsm.Events;
+                if (events != null)
+                {
+                    for (int e = 0; e < events.Length && e < 20; e++)
+                    {
+                        if (events[e] != null && !string.IsNullOrEmpty(events[e].Name))
+                        {
+                            evNames.Add(events[e].Name);
+                        }
+                    }
+                }
+                if (evNames.Count > 0)
+                {
+                    DebugLog.Verbose("BusFSM: events fsm=" + fsmName + " events=" + string.Join(", ", evNames.ToArray()));
+                }
+
+                logged++;
+            }
+
+            _devStatus = "Dumped bus FSMs to log.";
+        }
+
+        private void DumpTrafficVehicles()
+        {
+            int logged = 0;
+            DebugLog.Warn("Traffic dump:");
+
+            CarDynamics[] dyn = UnityEngine.Object.FindObjectsOfType<CarDynamics>();
+            if (dyn != null)
+            {
+                for (int i = 0; i < dyn.Length && logged < 40; i++)
+                {
+                    CarDynamics car = dyn[i];
+                    if (car == null || car.gameObject == null)
+                    {
+                        continue;
+                    }
+
+                    GameObject go = car.gameObject;
+                    if (go.name != null && go.name.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        continue;
+                    }
+
+                    string path = ObjectKeyBuilder.BuildDebugPath(go);
+                    if (path.IndexOf("TRAFFIC", StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        continue;
+                    }
+
+                    Vector3 p = go.transform.position;
+                    Rigidbody rb = go.GetComponent<Rigidbody>();
+                    float speed = rb != null ? rb.velocity.magnitude : 0f;
+                    DebugLog.Verbose("Traffic: type=CarDynamics name=" + go.name +
+                        " active=" + go.activeInHierarchy +
+                        " speed=" + speed.ToString("F1") +
+                        " pos=" + p.x.ToString("F1") + "," + p.y.ToString("F1") + "," + p.z.ToString("F1") +
+                        " path=" + path);
+                    logged++;
+                }
+            }
+
+            ArcadeCarNoPhysics[] arc = UnityEngine.Object.FindObjectsOfType<ArcadeCarNoPhysics>();
+            if (arc != null)
+            {
+                for (int i = 0; i < arc.Length && logged < 60; i++)
+                {
+                    ArcadeCarNoPhysics car = arc[i];
+                    if (car == null || car.gameObject == null)
+                    {
+                        continue;
+                    }
+
+                    GameObject go = car.gameObject;
+                    if (go.name != null && go.name.IndexOf("sorbet", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        continue;
+                    }
+
+                    string path = ObjectKeyBuilder.BuildDebugPath(go);
+                    if (path.IndexOf("TRAFFIC", StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        continue;
+                    }
+
+                    Vector3 p = go.transform.position;
+                    DebugLog.Verbose("Traffic: type=Arcade name=" + go.name +
+                        " active=" + go.activeInHierarchy +
+                        " speed=" + car.debugNopeus.ToString("F2") +
+                        " pos=" + p.x.ToString("F1") + "," + p.y.ToString("F1") + "," + p.z.ToString("F1") +
+                        " path=" + path);
+                    logged++;
+                }
+            }
+
+            _devStatus = "Dumped traffic vehicles to log.";
+        }
+
+        private void DumpBusCandidates()
+        {
+            bool includeInactive = _settings != null && _settings.Mode.Value == Mode.Client;
+
+            DebugLog.Warn("Bus candidates dump:");
+
+            if (_npcSync != null)
+            {
+                string trackedPath;
+                Transform trackedBus;
+                if (_npcSync.TryGetTrackedBus(out trackedBus, out trackedPath) && trackedBus != null)
+                {
+                    Vector3 p = trackedBus.position;
+                    Rigidbody trackedRb = trackedBus.GetComponent<Rigidbody>();
+                    float trackedSpeed = trackedRb != null ? trackedRb.velocity.magnitude : 0f;
+                    DebugLog.Verbose("BusCandidate: source=NpcSync active=" + trackedBus.gameObject.activeInHierarchy +
+                        " speed=" + trackedSpeed.ToString("F1") +
+                        " pos=" + p.x.ToString("F1") + "," + p.y.ToString("F1") + "," + p.z.ToString("F1") +
+                        " path=" + (trackedPath ?? string.Empty));
+                }
+            }
+
+            CarDynamics[] cars = includeInactive ? Resources.FindObjectsOfTypeAll<CarDynamics>() : UnityEngine.Object.FindObjectsOfType<CarDynamics>();
+            if (cars == null || cars.Length == 0)
+            {
+                return;
+            }
+
+            int logged = 0;
+            for (int i = 0; i < cars.Length && logged < 20; i++)
+            {
+                CarDynamics car = cars[i];
+                if (car == null || car.gameObject == null)
+                {
+                    continue;
+                }
+
+                GameObject go = car.gameObject;
+                if (includeInactive && go.hideFlags != HideFlags.None)
+                {
+                    continue;
+                }
+
+                if (go.name == null || go.name.IndexOf("bus", System.StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+
+                string path = ObjectKeyBuilder.BuildDebugPath(go);
+                if (path.IndexOf("NPC_CARS", System.StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+
+                Vector3 p = go.transform.position;
+                Rigidbody rb = go.GetComponent<Rigidbody>();
+                float speed = rb != null ? rb.velocity.magnitude : 0f;
+                DebugLog.Verbose("BusCandidate: active=" + go.activeInHierarchy +
+                    " speed=" + speed.ToString("F1") +
+                    " pos=" + p.x.ToString("F1") + "," + p.y.ToString("F1") + "," + p.z.ToString("F1") +
+                    " path=" + path);
+                logged++;
+            }
+
+            _devStatus = "Dumped bus candidates to log.";
+        }
+
+        private void TeleportToBus()
+        {
+            Vector3 pos;
+            if (!TryGetBusTeleportPosition(out pos))
+            {
+                return;
+            }
+
+            TeleportLocal(pos);
+            _devStatus = "Teleported to bus.";
+        }
+
+        private void TeleportToSorbet()
+        {
+            Vector3 pos;
+            if (!TryGetSorbetTeleportPosition(out pos))
+            {
+                return;
+            }
+
+            TeleportLocal(pos);
+            _devStatus = "Teleported to Sorbet.";
+        }
+
+        private bool TryGetBusTeleportPosition(out Vector3 position)
+        {
+            position = Vector3.zero;
+
+            string trackedBusPath;
+            Transform bus;
+            if (_npcSync != null && _npcSync.TryGetTrackedBus(out bus, out trackedBusPath))
+            {
+                _devCachedBus = bus;
+                _devCachedBusPath = trackedBusPath ?? string.Empty;
+            }
+            else
+            {
+                bus = ResolveDevVehicle(ref _devCachedBus, "bus", "NPC_CARS");
+                _devCachedBusPath = bus != null ? ObjectKeyBuilder.BuildDebugPath(bus) : string.Empty;
+            }
+
+            if (bus == null)
+            {
+                _devStatus = "Bus not found yet (drive around / wait for spawn).";
+                return false;
+            }
+
+            position = bus.position + (bus.right * 2f) + (Vector3.up * 0.15f);
+            return true;
+        }
+
+        private bool TryGetSorbetTeleportPosition(out Vector3 position)
+        {
+            position = Vector3.zero;
+
+            Transform car = ResolveDevVehicle(ref _devCachedSorbet, "sorbet", null);
+            if (car == null)
+            {
+                _devStatus = "Sorbet not found.";
+                return false;
+            }
+
+            position = car.position + (car.right * 2f) + (Vector3.up * 0.15f);
+            return true;
+        }
+
+        private Transform ResolveDevVehicle(ref Transform cached, string nameToken, string requiredPathToken)
+        {
+            if (_settings == null)
+            {
+                return null;
+            }
+
+            float now = Time.realtimeSinceStartup;
+            if (now - _devVehicleScanTime < 1f && cached != null)
+            {
+                return cached;
+            }
+            _devVehicleScanTime = now;
+
+            if (cached != null)
+            {
+                // If the cached vehicle got destroyed, clear it.
+                try
+                {
+                    if (cached.gameObject == null)
+                    {
+                        cached = null;
+                    }
+                }
+                catch (Exception)
+                {
+                    cached = null;
+                }
+            }
+
+            bool includeInactive = _settings.Mode.Value == Mode.Client;
+            CarDynamics[] vehicles = includeInactive ? Resources.FindObjectsOfTypeAll<CarDynamics>() : UnityEngine.Object.FindObjectsOfType<CarDynamics>();
+            if (vehicles == null || vehicles.Length == 0)
+            {
+                cached = null;
+                return null;
+            }
+
+            Transform best = null;
+            int bestScore = int.MinValue;
+            for (int i = 0; i < vehicles.Length; i++)
+            {
+                CarDynamics car = vehicles[i];
+                if (car == null || car.gameObject == null || car.transform == null)
+                {
+                    continue;
+                }
+
+                GameObject go = car.gameObject;
+                if (includeInactive && go.hideFlags != HideFlags.None)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(nameToken))
+                {
+                    if (go.name == null || go.name.IndexOf(nameToken, StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        continue;
+                    }
+                }
+
+                string path = ObjectKeyBuilder.BuildDebugPath(go);
+                if (!string.IsNullOrEmpty(requiredPathToken) &&
+                    path.IndexOf(requiredPathToken, StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+
+                bool active = go.activeInHierarchy;
+                int score = active ? 1000 : 0;
+
+                // Prefer stable "BusSpawn" instances for BUS, since the scene can have multiple BUS roots.
+                if (!string.IsNullOrEmpty(nameToken) && string.Equals(nameToken, "bus", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (path.IndexOf("BusSpawn", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        score += 6000;
+                    }
+                    if (path.IndexOf("BusSpawnPerajarvi", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        score += 2000;
+                    }
+                }
+
+                if (score > bestScore)
+                {
+                    best = car.transform;
+                    bestScore = score;
+                }
+            }
+
+            cached = best;
+            return cached;
         }
 
         private void ConnectLanHost(LanHostInfo host)

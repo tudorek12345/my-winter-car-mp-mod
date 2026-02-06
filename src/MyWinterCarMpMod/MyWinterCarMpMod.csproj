@@ -90,6 +90,7 @@
     <Compile Include="Patches\SteamPatches.cs" />
     <Compile Include="Sync\CameraFollower.cs" />
     <Compile Include="Sync\BusSync.cs" />
+    <Compile Include="Sync\BusSeatSync.cs" />
     <Compile Include="Sync\DoorSync.cs" />
     <Compile Include="Sync\LevelSync.cs" />
     <Compile Include="Sync\NpcSync.cs" />

@@ -1109,7 +1109,10 @@ namespace MyWinterCarMpMod.Net
             DoorHingeStateData[] doorHinges = _doorSync != null ? _doorSync.BuildHingeSnapshot(unixTimeMs, _sessionId) : new DoorHingeStateData[0];
             VehicleStateData[] vehicles = _vehicleSync != null ? _vehicleSync.BuildSnapshot(unixTimeMs, _sessionId) : new VehicleStateData[0];
             PickupStateData[] pickups = _pickupSync != null ? _pickupSync.BuildSnapshot(unixTimeMs, _sessionId) : new PickupStateData[0];
-            NpcStateData[] npcs = _npcSync != null ? _npcSync.BuildSnapshot(unixTimeMs, _sessionId) : new NpcStateData[0];
+            // NpcSync ignores sequence=0, so snapshots must carry a non-zero sequence so clients
+            // can initialize remote NPC vehicles (notably BUS/traffic) immediately on join.
+            uint npcSnapshotSequence = _npcSequence < 1 ? 1u : _npcSequence;
+            NpcStateData[] npcs = _npcSync != null ? _npcSync.BuildSnapshot(unixTimeMs, _sessionId, npcSnapshotSequence) : new NpcStateData[0];
 
             System.Collections.Generic.List<OwnershipUpdateData> ownershipList = new System.Collections.Generic.List<OwnershipUpdateData>();
             if (_vehicleSync != null)
