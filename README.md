@@ -26,10 +26,21 @@ Known active WIP:
 - Some AI/traffic edge cases still need dedicated FSM event replication per actor/system.
 
 
-## Requirements
+## Requirements & Installation
+
+### Prerequisites
 - My Winter Car (Windows).
-- BepInEx 5 (Mono, x64).
 - Steam P2P requires launching via Steam; local multi-instance testing uses LAN.
+
+### BepInEx Setup
+1. Download **BepInEx 5.4.21 (x64)** from the official releases.
+2. Extract the contents to your game folder.
+3. Edit `BepInEx/config/BepInEx.cfg` and set the entry point:
+   ```ini
+   [General]
+   Assembly = UnityEngine.dll
+   Type = MonoBehaviour
+   ```
 
 ## Quick Start (Main Menu)
 Host:
@@ -50,72 +61,128 @@ Local testing (two instances):
 - Set `Compatibility/AllowMultipleInstances = true` and restart the game.
 - This skips Steam bootstrap, so use LAN transport only.
 
+### Double Folder Method (Bypass Steam Locks)
+To run multiple game instances locally without Steam interference:
 
+1. Copy your entire game folder to a second location (e.g., `MyWinterCar_Client`).
+2. Launch the first instance from your original game folder via Steam, in the menu tick the multi instance.
+3. Launch the second instance directly from the copied folder by running `MyWinterCar.exe`.
 
-UI:
-- `MainMenuPanelEnabled = true`
+## Building from Source
 
-Compatibility:
-- `AllowMultipleInstances = false`
+### Prerequisites
+- **.NET Framework 3.5**
+- Visual Studio or compatible build tools
 
-Steam P2P:
-- `SpectatorHostSteamId = 0`
-- `AllowOnlySteamId = 0`
-- `P2PChannel = 0`
-- `ReliableForControl = true`
+### Required References
+The following DLLs must be referenced from your game installation:
+- `Assembly-CSharp.dll`
+- `UnityEngine.dll`
+- `UnityEngine.UI.dll`
+- `PlayMaker.dll`
+- `BepInEx.dll`
+- `0Harmony.dll` (**Warning**: Use `0Harmony.dll`, NOT `0Harmony20.dll`)
 
-TCP LAN:
-- `HostBindIP = 0.0.0.0`
-- `HostPort = 27055`
-- `SpectatorHostIP = 127.0.0.1`
+### Build Steps
+1. Clone the repository
+2. Add all required references to the project
+3. Build in Release mode
+4. Copy the output DLL to `BepInEx/plugins/MWCMP/`
 
-LanDiscovery:
-- `Enabled = true`
-- `Port = 27056`
-- `BroadcastIntervalSeconds = 1.5`
-- `HostTimeoutSeconds = 5`
+## Configuration Reference
 
-DoorSync:
-- `Enabled = true`
-- `PlayMakerEvents = true`
-- `SendHz = 10`
-- `AngleThreshold = 1`
-- `NameFilter = door,ovi,tap,faucet,sink` (empty = all hinges)
+### UI
+```ini
+MainMenuPanelEnabled = true
+```
 
-PickupSync:
-- `Enabled = false` (set true to sync cabin pickups like phone/props)
-- `ClientSend = false`
-- `SendHz = 12`
-- `PositionThreshold = 0.02`
-- `RotationThreshold = 2.0`
-- `NameFilter = ` (optional filter, comma-separated)
+### Compatibility
+```ini
+AllowMultipleInstances = false
+```
 
-VehicleSync:
-- `Enabled = true` (experimental, Sorbet sync WIP)
-- `ClientSend = true`
-- `OwnershipEnabled = true`
-- `SeatDistance = 1.2`
-- `SendHz = 10`
-- `PositionThreshold = 0.05`
-- `RotationThreshold = 1.0`
+### Steam P2P
+```ini
+SpectatorHostSteamId = 0
+AllowOnlySteamId = 0
+P2PChannel = 0
+ReliableForControl = true
+```
 
-Avatar:
-- `BundlePath = plugins\MyWinterCarMpMod\mpdata`
-- `AssetName = assets/mpplayermodel/mpplayermodel.fbx`
-- `Scale = 3.8` (tune)
-- `YOffset = 0.85` (tune)
+### TCP LAN
+```ini
+HostBindIP = 0.0.0.0
+HostPort = 27055
+SpectatorHostIP = 127.0.0.1
+```
 
-Networking:
-- `ConnectionTimeoutSeconds = 10`
-- `HelloRetrySeconds = 2`
-- `KeepAliveSeconds = 2`
-- `AutoReconnect = true`
-- `ReconnectDelaySeconds = 3`
-- `MaxReconnectAttempts = 5` (0 = infinite)
-- `LevelSyncIntervalSeconds = 5`
+### LanDiscovery
+```ini
+Enabled = true
+Port = 27056
+BroadcastIntervalSeconds = 1.5
+HostTimeoutSeconds = 5
+```
 
-Spectator:
-- `SpectatorLockdown = true` (legacy, unused in co-op)
+### DoorSync
+```ini
+Enabled = true
+PlayMakerEvents = true
+SendHz = 10
+AngleThreshold = 1
+NameFilter = door,ovi,tap,faucet,sink
+```
+*Note: Leave `NameFilter` empty to include all hinges*
+
+### PickupSync
+```ini
+Enabled = false
+ClientSend = false
+SendHz = 12
+PositionThreshold = 0.02
+RotationThreshold = 2.0
+NameFilter =
+```
+*Note: Set `Enabled = true` to sync cabin pickups like phone/props. `NameFilter` is optional, comma-separated.*
+
+### VehicleSync
+```ini
+Enabled = true
+ClientSend = true
+OwnershipEnabled = true
+SeatDistance = 1.2
+SendHz = 10
+PositionThreshold = 0.05
+RotationThreshold = 1.0
+```
+*Note: Experimental Sorbet sync, work in progress*
+
+### Avatar
+```ini
+BundlePath = plugins\MyWinterCarMpMod\mpdata
+AssetName = assets/mpplayermodel/mpplayermodel.fbx
+Scale = 3.8
+YOffset = 0.85
+```
+*Note: Tune `Scale` and `YOffset` values as needed*
+
+### Networking
+```ini
+ConnectionTimeoutSeconds = 10
+HelloRetrySeconds = 2
+KeepAliveSeconds = 2
+AutoReconnect = true
+ReconnectDelaySeconds = 3
+MaxReconnectAttempts = 5
+LevelSyncIntervalSeconds = 5
+```
+*Note: Set `MaxReconnectAttempts = 0` for infinite attempts*
+
+### Spectator
+```ini
+SpectatorLockdown = true
+```
+*Note: Legacy setting, unused in co-op mode*
 
 ## Logs
 - BepInEx global log: `BepInEx/LogOutput.log`
